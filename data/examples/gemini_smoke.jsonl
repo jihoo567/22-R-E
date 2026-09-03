@@ -1,0 +1,1 @@
+{"id":"gemini-smoke-original","parent_id":"gemini-smoke","variant_type":"original","prompt":"정확히 '확인 완료'라고만 답하세요.","reference_answer":"확인 완료","evaluation_rules":[{"rule_id":"smoke-rule-1","type":"must_include","value":"확인 완료"},{"rule_id":"smoke-rule-2","type":"regex","value":"^확인 완료$"}],"metadata":{"category":"smoke_test","source":"framework"}}

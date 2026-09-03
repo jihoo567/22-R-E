@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "korean-prompt-robustness"
+version = "0.1.0"
+description = "준비된 한국어 원본·변형 문제를 실행하고 비교하는 최소 벤치마크"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+kpr = "korean_prompt_robustness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

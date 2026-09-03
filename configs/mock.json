@@ -1,0 +1,28 @@
+{
+  "dataset_version": "kite-example-v1",
+  "scoring_mode": "hybrid",
+  "rule_evaluator_version": "1.0.0",
+  "pass_threshold": 100.0,
+  "allow_mock_judge": true,
+  "test_model": {
+    "provider": "mock",
+    "model_id": "mock-model",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 256,
+    "max_retries": 1,
+    "retry_delay_seconds": 0.0,
+    "timeout_seconds": 30.0
+  },
+  "judge_model": {
+    "provider": "mock",
+    "model_id": "mock-judge",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 512,
+    "max_retries": 1,
+    "retry_delay_seconds": 0.0,
+    "timeout_seconds": 30.0,
+    "prompt_version": "judge-ko-v1"
+  }
+}

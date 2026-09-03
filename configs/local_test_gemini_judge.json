@@ -1,0 +1,28 @@
+{
+  "dataset_version": "replace-with-your-dataset-version",
+  "scoring_mode": "hybrid",
+  "rule_evaluator_version": "1.0.0",
+  "pass_threshold": 100.0,
+  "test_model": {
+    "provider": "local",
+    "model_id": "gemma3:4b",
+    "command": "ollama run gemma3:4b",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 1024,
+    "max_retries": 1,
+    "retry_delay_seconds": 1.0,
+    "timeout_seconds": 120.0
+  },
+  "judge_model": {
+    "provider": "gemini",
+    "model_id": "gemini-3.6-flash",
+    "temperature": 0.0,
+    "seed": 42,
+    "max_tokens": 1024,
+    "max_retries": 2,
+    "retry_delay_seconds": 1.0,
+    "timeout_seconds": 60.0,
+    "prompt_version": "judge-ko-v1"
+  }
+}
