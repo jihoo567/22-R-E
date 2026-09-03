@@ -21,6 +21,7 @@ class LocalCommandModel(ModelAdapter):
             command,
             input=problem.prompt,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=settings.timeout_seconds,
             check=False,
@@ -39,4 +40,3 @@ class LocalCommandModel(ModelAdapter):
                 "returncode": completed.returncode,
             },
         )
-

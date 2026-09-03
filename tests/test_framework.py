@@ -5,6 +5,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from korean_prompt_robustness.config import JudgeSettings, ProviderSettings, RunConfig
 from korean_prompt_robustness.evaluators.final import combine_scores
@@ -296,6 +298,34 @@ class RunnerAndMetricTests(unittest.TestCase):
             problems[0], "모델 응답", rendered_prompt, settings
         )
         self.assertEqual(rendered_prompt, output)
+
+    def test_local_adapters_force_utf8_on_windows_subprocess_output(self):
+        problems = validate_dataset([problem_record("p-original", "p", "original")])
+        model_settings = ProviderSettings(
+            provider="local", model_id="local", command="local-command"
+        )
+        judge_settings = JudgeSettings(
+            provider="local", model_id="local", command="local-command"
+        )
+        completed = SimpleNamespace(
+            returncode=0, stdout="한글 응답", stderr=""
+        )
+
+        with patch(
+            "korean_prompt_robustness.models.local.subprocess.run",
+            return_value=completed,
+        ) as model_run:
+            LocalCommandModel().generate(problems[0], model_settings)
+            self.assertEqual("utf-8", model_run.call_args.kwargs["encoding"])
+
+        with patch(
+            "korean_prompt_robustness.judges.local.subprocess.run",
+            return_value=completed,
+        ) as judge_run:
+            LocalCommandJudge().judge(
+                problems[0], "응답", "평가 프롬프트", judge_settings
+            )
+            self.assertEqual("utf-8", judge_run.call_args.kwargs["encoding"])
 
     def test_response_cache_and_resume(self):
         original = problem_record("p-original", "p", "original")
