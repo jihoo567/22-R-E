@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +27,14 @@ from korean_prompt_robustness.schemas.problem import Problem, Rule, validate_dat
 
 def custom_contains(response: str, context: dict) -> bool:
     return "맞춤" in response
+
+
+def stdin_echo_command() -> str:
+    """운영체제와 관계없이 stdin을 stdout으로 복사하는 테스트 명령입니다."""
+    return (
+        f'"{sys.executable}" -c '
+        '"import sys;sys.stdout.write(sys.stdin.read())"'
+    )
 
 
 def problem_record(
@@ -140,7 +149,7 @@ class SchemaTests(unittest.TestCase):
         value["judge_model"] = {
             "provider": "local",
             "model_id": "local-judge",
-            "command": "/bin/cat",
+            "command": stdin_echo_command(),
         }
         parsed = RunConfig.from_dict(value)
         self.assertEqual("local", parsed.test_model.provider)
@@ -270,7 +279,7 @@ class RunnerAndMetricTests(unittest.TestCase):
         settings = ProviderSettings(
             provider="local",
             model_id="local-cat",
-            command="/bin/cat",
+            command=stdin_echo_command(),
         )
         output = LocalCommandModel().generate(problems[0], settings)
         self.assertEqual(problems[0].prompt, output.text)
@@ -280,7 +289,7 @@ class RunnerAndMetricTests(unittest.TestCase):
         settings = JudgeSettings(
             provider="local",
             model_id="local-cat",
-            command="/bin/cat",
+            command=stdin_echo_command(),
         )
         rendered_prompt = "Judge에 전달할 구조화 평가 프롬프트"
         output = LocalCommandJudge().judge(
