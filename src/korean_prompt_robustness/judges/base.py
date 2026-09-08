@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..config import JudgeSettings
+from ..config import ProviderSettings
 from ..schemas import Problem
 
 
@@ -15,7 +15,6 @@ class JudgeAdapter(ABC):
         problem: Problem,
         response: str,
         rendered_prompt: str,
-        settings: JudgeSettings,
+        settings: ProviderSettings,
     ) -> str:
-        """구조화 결과를 담은 JSON 원문을 반환합니다."""
-
+        """Judge가 생성한 텍스트 원문을 반환합니다."""

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "korean-prompt-robustness"
-version = "0.1.0"
-description = "준비된 한국어 원본·변형 문제를 실행하고 비교하는 최소 벤치마크"
+version = "0.3.0"
+description = "사전 설정한 테스트 모델과 Judge 모델의 응답을 콘솔에 출력하는 최소 벤치마크"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
@@ -15,4 +15,3 @@ kpr = "korean_prompt_robustness.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

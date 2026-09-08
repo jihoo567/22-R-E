@@ -1,37 +1,32 @@
-"""단계별 실행이 가능한 명령행 인터페이스."""
+"""사전 설정 후 콘솔에서 실행하는 최소 벤치마크 CLI."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shutil
 from pathlib import Path
-from typing import Any
 
-from .config import RunConfig, load_config
-from .io import make_run_id, read_json, read_jsonl, replace_jsonl, write_json
-from .judges import create_judge
-from .metrics import calculate_robustness
-from .models import create_model
-from .reports import create_csv_reports, print_console_summary
-from .runners import (
-    finalize_scores,
-    generate_responses,
-    judge_responses,
-    score_rule_responses,
+from .auth import FALLBACK_KEY_ENVS, find_api_key
+from .config import (
+    RunConfig,
+    load_config,
+    make_provider_settings,
+    save_config,
 )
+from .judges import create_judge
+from .local_process import command_executable
+from .models import create_model
+from .runners import run_benchmark
 from .schemas import load_and_validate_dataset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-REPO_ROOT = PROJECT_ROOT.parent
-
-
-def _judge_stage_label(config: RunConfig) -> str:
-    if config.judge_model.provider == "mock":
-        return "Mock Judge 평가(자동 테스트 전용)"
-    if config.judge_model.provider == "local":
-        return "로컬 Judge 평가"
-    return "API Judge 평가"
+DEFAULT_SETTINGS_PATH = PROJECT_ROOT / ".kpr" / "config.json"
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
+PROVIDER_CHOICES = ("local", "gemini", "openai-compatible")
 
 
 def _load_env_file(path: Path) -> None:
@@ -48,247 +43,179 @@ def _load_env_file(path: Path) -> None:
             os.environ[key] = value.strip().strip('"').strip("'")
 
 
-def _paths(base: Path, run_id: str) -> dict[str, Path]:
-    return {
-        "responses": base / "responses" / f"{run_id}.jsonl",
-        "response_cache": base / "responses" / "cache.jsonl",
-        "judgments": base / "judgments" / f"{run_id}.jsonl",
-        "judge_cache": base / "judgments" / "cache.jsonl",
-        "rules": base / "scores" / f"{run_id}.rules.jsonl",
-        "final": base / "scores" / f"{run_id}.final.jsonl",
-        "pairs": base / "scores" / f"{run_id}.comparisons.jsonl",
-        "metrics": base / "scores" / f"{run_id}.metrics.json",
-        "reports": base / "reports" / run_id,
-    }
+def _model_id(provider: str, requested: str | None, role: str) -> str:
+    if requested:
+        return requested
+    if provider == "gemini":
+        return DEFAULT_GEMINI_MODEL
+    if provider == "local":
+        return DEFAULT_LOCAL_MODEL
+    raise ValueError(f"{role}에 openai-compatible을 선택하면 모델 ID가 필요합니다.")
 
 
-def run_pipeline(
-    input_path: Path,
-    config: RunConfig,
-    run_id: str,
-    result_base: Path,
-    repo_root: Path = REPO_ROOT,
-) -> dict[str, Any]:
-    problems = load_and_validate_dataset(input_path)
-    paths = _paths(result_base, run_id)
-    print(
-        f"[1/5] 테스트 모델 응답 생성: "
-        f"{config.test_model.provider}/{config.test_model.model_id}",
-        flush=True,
+def _validate_runtime(config: RunConfig) -> None:
+    """첫 문제를 보내기 전에 API 키와 로컬 명령을 검사합니다."""
+    for role, settings in (
+        ("테스트 모델", config.test_model),
+        ("Judge 모델", config.judge_model),
+    ):
+        if settings.provider != "local":
+            api_key, _ = find_api_key(settings)
+            if not api_key:
+                fallback = FALLBACK_KEY_ENVS.get(settings.provider)
+                expected = settings.api_key_env
+                alternatives = " 또는 ".join(
+                    name for name in (expected, fallback) if name
+                )
+                raise ValueError(
+                    f"{role}({settings.provider}) API 키가 없습니다. "
+                    f".env에 {alternatives}=실제키를 입력하세요."
+                )
+            continue
+
+        assert settings.command is not None
+        executable = command_executable(settings.command)
+        if shutil.which(executable) is None:
+            raise ValueError(
+                f"{role}의 로컬 실행 파일을 찾을 수 없습니다: {executable}"
+            )
+
+
+def _add_settings_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--settings",
+        type=Path,
+        default=DEFAULT_SETTINGS_PATH,
+        help=argparse.SUPPRESS,
     )
-    responses, generation_counts = generate_responses(
-        problems,
-        config,
-        create_model(config.test_model),
-        run_id,
-        paths["responses"],
-        paths["response_cache"],
-        repo_root,
-    )
-    rule_scores = (
-        score_rule_responses(
-            problems, responses, config, run_id, paths["rules"], repo_root
-        )
-        if config.scoring_mode != "judge_only"
-        else []
-    )
-    if config.scoring_mode != "judge_only":
-        print(f"[2/5] 규칙 채점 완료: {len(rule_scores)}건", flush=True)
-    judgments: list[dict[str, Any]] = []
-    judge_counts = {"judged": 0, "cached": 0, "skipped": 0, "failed": 0}
-    if config.scoring_mode != "rule_only":
-        print(
-            f"[3/5] {_judge_stage_label(config)}: "
-            f"{config.judge_model.provider}/{config.judge_model.model_id}",
-            flush=True,
-        )
-        judgments, judge_counts = judge_responses(
-            problems,
-            responses,
-            config,
-            create_judge(
-                config.judge_model, allow_mock_judge=config.allow_mock_judge
-            ),
-            run_id,
-            paths["judgments"],
-            paths["judge_cache"],
-            repo_root,
-        )
-    final_records = finalize_scores(
-        problems,
-        responses,
-        rule_scores,
-        judgments,
-        config,
-        run_id,
-        paths["final"],
-        repo_root,
-    )
-    pairs, summary = calculate_robustness(final_records, config.pass_threshold)
-    print("[4/5] 원본·변형 강건성 지표 계산 완료", flush=True)
-    replace_jsonl(paths["pairs"], pairs)
-    write_json(paths["metrics"], summary)
-    report_paths = create_csv_reports(final_records, pairs, summary, paths["reports"])
-    print(f"[5/5] CSV 보고서 생성 완료: {paths['reports']}", flush=True)
-    print_console_summary(summary)
-    return {
-        "run_id": run_id,
-        "paths": {key: str(value) for key, value in paths.items()},
-        "generation_counts": generation_counts,
-        "judge_counts": judge_counts,
-        "summary": summary,
-        "report_paths": [str(path) for path in report_paths],
-    }
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="kpr", description="준비된 원본·변형 문제 실행/채점/비교 도구"
+        prog="kpr",
+        description="사전 설정한 테스트 모델과 Judge 모델을 콘솔에서 실행합니다.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    validate = subparsers.add_parser("validate", help="입력 JSONL 검증")
-    validate.add_argument("--input", type=Path, required=True)
+    configure = subparsers.add_parser(
+        "configure", help="테스트 모델과 Judge 모델을 먼저 설정"
+    )
+    configure.add_argument(
+        "--test", choices=PROVIDER_CHOICES, required=True, help="테스트 모델 방식"
+    )
+    configure.add_argument(
+        "--judge", choices=PROVIDER_CHOICES, required=True, help="Judge 모델 방식"
+    )
+    configure.add_argument("--test-model", help="테스트 모델 ID")
+    configure.add_argument("--judge-model", help="Judge 모델 ID")
+    configure.add_argument(
+        "--test-command", help="테스트 로컬 명령(기본값: ollama run <모델 ID>)"
+    )
+    configure.add_argument(
+        "--judge-command", help="Judge 로컬 명령(기본값: ollama run <모델 ID>)"
+    )
+    configure.add_argument(
+        "--test-base-url", help="테스트 OpenAI 호환 API의 base URL"
+    )
+    configure.add_argument(
+        "--judge-base-url", help="Judge OpenAI 호환 API의 base URL"
+    )
+    _add_settings_argument(configure)
 
-    common_help = "설정 JSON"
-    generate = subparsers.add_parser("generate", help="모델 응답 생성")
-    generate.add_argument("--input", type=Path, required=True)
-    generate.add_argument("--config", type=Path, required=True, help=common_help)
-    generate.add_argument("--run-id", required=True)
-    generate.add_argument("--result-base", type=Path, default=PROJECT_ROOT / "results")
+    show = subparsers.add_parser("show-config", help="현재 사전 설정 표시")
+    _add_settings_argument(show)
 
-    rules = subparsers.add_parser("score-rules", help="저장 응답 규칙 재채점")
-    rules.add_argument("--input", type=Path, required=True)
-    rules.add_argument("--responses", type=Path, required=True)
-    rules.add_argument("--config", type=Path, required=True, help=common_help)
-    rules.add_argument("--run-id", required=True)
-    rules.add_argument("--output", type=Path, required=True)
+    validate = subparsers.add_parser("validate", help="문제 JSONL 검증")
+    validate.add_argument("input", type=Path, help="문제 JSONL 경로")
 
-    judge = subparsers.add_parser("score-judge", help="저장 응답 Judge 채점")
-    judge.add_argument("--input", type=Path, required=True)
-    judge.add_argument("--responses", type=Path, required=True)
-    judge.add_argument("--config", type=Path, required=True, help=common_help)
-    judge.add_argument("--run-id", required=True)
-    judge.add_argument("--output", type=Path, required=True)
-    judge.add_argument("--cache", type=Path, required=True)
-
-    metrics = subparsers.add_parser("metrics", help="최종 점수와 강건성 지표 계산")
-    metrics.add_argument("--input", type=Path, required=True)
-    metrics.add_argument("--responses", type=Path, required=True)
-    metrics.add_argument("--rule-scores", type=Path)
-    metrics.add_argument("--judgments", type=Path)
-    metrics.add_argument("--config", type=Path, required=True, help=common_help)
-    metrics.add_argument("--run-id", required=True)
-    metrics.add_argument("--final-output", type=Path, required=True)
-    metrics.add_argument("--pairs-output", type=Path, required=True)
-    metrics.add_argument("--summary-output", type=Path, required=True)
-
-    report = subparsers.add_parser("report", help="CSV 보고서 생성")
-    report.add_argument("--scores", type=Path, required=True)
-    report.add_argument("--comparisons", type=Path, required=True)
-    report.add_argument("--summary", type=Path, required=True)
-    report.add_argument("--output-dir", type=Path, required=True)
-
-    all_parser = subparsers.add_parser("run-all", help="전체 평가 파이프라인")
-    all_parser.add_argument("--input", type=Path, required=True)
-    all_parser.add_argument("--config", type=Path, required=True, help=common_help)
-    all_parser.add_argument("--run-id")
-    all_parser.add_argument("--result-base", type=Path, default=PROJECT_ROOT / "results")
+    run = subparsers.add_parser(
+        "run", help="문제 → 테스트 모델 → Judge 실행 후 콘솔 출력"
+    )
+    run.add_argument("input", type=Path, help="문제 JSONL 경로")
+    run.add_argument("--limit", type=int, help="앞에서부터 실행할 문제 수")
+    _add_settings_argument(run)
     return parser
+
+
+def _configure(args: argparse.Namespace) -> None:
+    test_model_id = _model_id(args.test, args.test_model, "테스트 모델")
+    judge_model_id = _model_id(args.judge, args.judge_model, "Judge 모델")
+    config = RunConfig(
+        test_model=make_provider_settings(
+            args.test,
+            test_model_id,
+            args.test_command,
+            base_url=args.test_base_url,
+            api_key_env=(
+                "KPR_TEST_API_KEY" if args.test != "local" else None
+            ),
+            timeout_seconds=600.0 if args.test == "local" else 120.0,
+        ),
+        judge_model=make_provider_settings(
+            args.judge,
+            judge_model_id,
+            args.judge_command,
+            base_url=args.judge_base_url,
+            api_key_env=(
+                "KPR_JUDGE_API_KEY" if args.judge != "local" else None
+            ),
+            timeout_seconds=600.0 if args.judge == "local" else 120.0,
+        ),
+    )
+    save_config(args.settings, config)
+    print(f"사전 설정 완료: {args.settings}")
+    print(f"테스트 모델: {args.test} / {test_model_id}")
+    print(f"Judge 모델: {args.judge} / {judge_model_id}")
+    if args.test != "local":
+        print("테스트 API 키: .env의 KPR_TEST_API_KEY")
+    if args.judge != "local":
+        print("Judge API 키: .env의 KPR_JUDGE_API_KEY")
+
+
+def _run(args: argparse.Namespace) -> None:
+    config = load_config(args.settings)
+    _validate_runtime(config)
+    problems = load_and_validate_dataset(args.input)
+    if args.limit is not None:
+        if args.limit <= 0:
+            raise ValueError("--limit은 1 이상의 정수여야 합니다.")
+        problems = problems[: args.limit]
+    if not problems:
+        raise ValueError("실행할 문제가 없습니다.")
+
+    print(
+        f"테스트 모델: {config.test_model.provider} / {config.test_model.model_id}"
+    )
+    print(
+        f"Judge 모델: {config.judge_model.provider} / {config.judge_model.model_id}"
+    )
+    run_benchmark(
+        problems,
+        config,
+        create_model(config.test_model),
+        create_judge(config.judge_model),
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
     _load_env_file(PROJECT_ROOT / ".env")
-    args = build_parser().parse_args(argv)
-    if args.command == "validate":
-        problems = load_and_validate_dataset(args.input)
-        print(f"검증 성공: {len(problems)}개 문제, {len({p.parent_id for p in problems})}개 parent_id")
-        return
-    if args.command == "generate":
-        config = load_config(args.config)
-        problems = load_and_validate_dataset(args.input)
-        paths = _paths(args.result_base, args.run_id)
-        print(
-            f"테스트 모델 응답 생성: "
-            f"{config.test_model.provider}/{config.test_model.model_id}",
-            flush=True,
-        )
-        _, counts = generate_responses(
-            problems,
-            config,
-            create_model(config.test_model),
-            args.run_id,
-            paths["responses"],
-            paths["response_cache"],
-            REPO_ROOT,
-        )
-        print(f"응답 파일: {paths['responses']}")
-        print(f"처리 결과: {counts}")
-        return
-    if args.command == "score-rules":
-        config = load_config(args.config)
-        records = score_rule_responses(
-            load_and_validate_dataset(args.input),
-            read_jsonl(args.responses),
-            config,
-            args.run_id,
-            args.output,
-            REPO_ROOT,
-        )
-        print(f"규칙 채점 완료: {len(records)}건, {args.output}")
-        return
-    if args.command == "score-judge":
-        config = load_config(args.config)
-        print(
-            f"{_judge_stage_label(config)}: "
-            f"{config.judge_model.provider}/{config.judge_model.model_id}",
-            flush=True,
-        )
-        records, counts = judge_responses(
-            load_and_validate_dataset(args.input),
-            read_jsonl(args.responses),
-            config,
-            create_judge(
-                config.judge_model, allow_mock_judge=config.allow_mock_judge
-            ),
-            args.run_id,
-            args.output,
-            args.cache,
-            REPO_ROOT,
-        )
-        print(f"Judge 채점 완료: {len(records)}건, {counts}, {args.output}")
-        return
-    if args.command == "metrics":
-        config = load_config(args.config)
-        problems = load_and_validate_dataset(args.input)
-        final_records = finalize_scores(
-            problems,
-            read_jsonl(args.responses),
-            read_jsonl(args.rule_scores, missing_ok=True) if args.rule_scores else [],
-            read_jsonl(args.judgments, missing_ok=True) if args.judgments else [],
-            config,
-            args.run_id,
-            args.final_output,
-            REPO_ROOT,
-        )
-        pairs, summary = calculate_robustness(final_records, config.pass_threshold)
-        replace_jsonl(args.pairs_output, pairs)
-        write_json(args.summary_output, summary)
-        print_console_summary(summary)
-        return
-    if args.command == "report":
-        paths = create_csv_reports(
-            read_jsonl(args.scores),
-            read_jsonl(args.comparisons),
-            read_json(args.summary),
-            args.output_dir,
-        )
-        print(f"CSV 보고서 {len(paths)}개 생성: {args.output_dir}")
-        return
-    if args.command == "run-all":
-        run_id = args.run_id or make_run_id("experiment")
-        result = run_pipeline(
-            args.input, load_config(args.config), run_id, args.result_base
-        )
-        print(f"실행 ID: {result['run_id']}")
-        print(f"결과 디렉터리: {args.result_base}")
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command == "configure":
+            _configure(args)
+        elif args.command == "show-config":
+            config = load_config(args.settings)
+            print(json.dumps(config.to_dict(), ensure_ascii=False, indent=2))
+        elif args.command == "validate":
+            problems = load_and_validate_dataset(args.input)
+            print(f"검증 성공: {len(problems)}개 문제")
+        else:
+            _run(args)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,22 +1,26 @@
 @echo off
 setlocal
+chcp 65001 >nul
+set "PYTHONUTF8=1"
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" goto :not_installed
 if not exist ".env" goto :key_missing
-findstr /B /C:"GEMINI_API_KEY=" ".env" >nul 2>nul
-if errorlevel 1 goto :key_missing
-findstr /C:"your-gemini-api-key" ".env" >nul 2>nul
-if not errorlevel 1 goto :key_missing
 
-".venv\Scripts\python.exe" -m korean_prompt_robustness run-all ^
-  --input data\examples\kite_pairs.jsonl ^
-  --config configs\gemini.json ^
-  --run-id gemini-5
+".venv\Scripts\python.exe" -m korean_prompt_robustness configure ^
+  --test gemini ^
+  --test-model gemini-3.6-flash ^
+  --judge gemini ^
+  --judge-model gemini-3.7-flash
+if errorlevel 1 goto :run_failed
+
+".venv\Scripts\python.exe" -m korean_prompt_robustness run ^
+  data\examples\problems.jsonl ^
+  --limit 5
 if errorlevel 1 goto :run_failed
 
 echo.
-echo Gemini run finished. Results are in the results folder.
+echo Finished. Responses were printed above and were not saved to files.
 pause
 exit /b 0
 
@@ -31,6 +35,6 @@ pause
 exit /b 1
 
 :run_failed
-echo Gemini run failed. Review the message above and the JSONL error records.
+echo The run failed. Review the message above.
 pause
 exit /b 1

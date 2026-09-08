@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 
-from ..config import JudgeSettings
+from ..config import ProviderSettings
+from ..local_process import prepare_command
 from ..schemas import Problem
 from .base import JudgeAdapter
 
@@ -18,13 +18,11 @@ class LocalCommandJudge(JudgeAdapter):
         problem: Problem,
         response: str,
         rendered_prompt: str,
-        settings: JudgeSettings,
+        settings: ProviderSettings,
     ) -> str:
         if not settings.command:
             raise ValueError("local Judge에는 judge_model.command가 필요합니다.")
-        command = shlex.split(settings.command)
-        if not command:
-            raise ValueError("로컬 Judge 명령이 비어 있습니다.")
+        command = prepare_command(settings.command)
         completed = subprocess.run(
             command,
             input=rendered_prompt,
@@ -41,5 +39,5 @@ class LocalCommandJudge(JudgeAdapter):
             )
         if completed.stdout == "":
             raise RuntimeError("로컬 Judge가 빈 stdout을 반환했습니다.")
-        # JSON 파싱과 스키마 검증은 공통 Judge runner가 수행합니다.
+        # 후처리하지 않고 Judge의 stdout 원문을 그대로 보존합니다.
         return completed.stdout

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 
 from ..config import ProviderSettings
+from ..local_process import prepare_command
 from ..schemas import Problem
 from .base import ModelAdapter, ModelOutput
 
@@ -14,9 +14,7 @@ class LocalCommandModel(ModelAdapter):
     def generate(self, problem: Problem, settings: ProviderSettings) -> ModelOutput:
         if not settings.command:
             raise ValueError("local provider에는 model.command가 필요합니다.")
-        command = shlex.split(settings.command)
-        if not command:
-            raise ValueError("로컬 모델 명령이 비어 있습니다.")
+        command = prepare_command(settings.command)
         completed = subprocess.run(
             command,
             input=problem.prompt,

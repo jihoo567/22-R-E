@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-from ..config import JudgeSettings
+from ..config import ProviderSettings
 from .base import JudgeAdapter
 from .gemini import GeminiJudge
 from .local import LocalCommandJudge
-from .mock import MockJudge
+from .openai_compatible import OpenAICompatibleJudge
 
 
 def create_judge(
-    settings: JudgeSettings, *, allow_mock_judge: bool = False
+    settings: ProviderSettings,
 ) -> JudgeAdapter:
     adapters: dict[str, type[JudgeAdapter]] = {
         "gemini": GeminiJudge,
         "local": LocalCommandJudge,
+        "openai-compatible": OpenAICompatibleJudge,
     }
-    if settings.provider == "mock":
-        if not allow_mock_judge:
-            raise ValueError(
-                "Mock Judge는 allow_mock_judge=true인 자동 테스트에서만 사용할 수 있습니다."
-            )
-        return MockJudge()
     try:
         return adapters[settings.provider]()
     except KeyError as error:

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
+from ..auth import require_api_key
 from ..config import ProviderSettings
 from ..schemas import Problem
 from .base import ModelAdapter, ModelOutput
@@ -21,9 +21,7 @@ def call_gemini(
     system_instruction: str | None = None,
     response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY 환경변수가 없습니다.")
+    api_key = require_api_key(settings)
     model_id = urllib.parse.quote(settings.model_id, safe="-._")
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -77,4 +75,3 @@ class GeminiModel(ModelAdapter):
     def generate(self, problem: Problem, settings: ProviderSettings) -> ModelOutput:
         response = call_gemini(prompt=problem.prompt, settings=settings)
         return ModelOutput(extract_text(response), response)
-
