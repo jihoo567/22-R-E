@@ -25,7 +25,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [3/5] Installing benchmark...
-".venv\Scripts\python.exe" -m pip install -e .
+".venv\Scripts\python.exe" -m pip install .
 if errorlevel 1 goto :failed
 
 echo [4/5] Preparing .env...
