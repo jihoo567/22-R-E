@@ -2,6 +2,7 @@
 setlocal
 chcp 65001 >nul
 set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
 
 echo [1/5] Checking Python 3.10 or newer...
@@ -34,8 +35,13 @@ echo [5/5] Running tests...
 ".venv\Scripts\python.exe" -m unittest discover -s tests -q
 if errorlevel 1 goto :failed
 
+call kpr.bat --help >nul
+if errorlevel 1 goto :failed
+
 echo.
 echo Installation completed successfully.
+echo CMD: kpr.bat --help
+echo PowerShell: .\kpr.bat --help
 echo Read WINDOWS_INSTALL.md, configure the two models, and run the benchmark.
 pause
 exit /b 0

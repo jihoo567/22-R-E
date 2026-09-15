@@ -23,3 +23,15 @@ jobs:
         run: python -m pip install -e .
       - name: Test
         run: python -m unittest discover -s tests -v
+      - name: Test Windows launcher from a Unicode path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $smoke = Join-Path $env:RUNNER_TEMP "한글 경로"
+          New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+          Copy-Item kpr.bat $smoke
+          python -m venv (Join-Path $smoke ".venv")
+          & (Join-Path $smoke ".venv\Scripts\python.exe") -m pip install -e .
+          Push-Location $smoke
+          & .\kpr.bat --help
+          Pop-Location

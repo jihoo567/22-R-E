@@ -140,54 +140,64 @@ kpr --help
 프로젝트의 `.venv` 안에 설치되며, `install_windows.bat`이 종료되면 그
 가상환경이 현재 터미널에 자동으로 유지되지 않습니다.
 
-가장 확실한 실행 방법은 가상환경 안의 `kpr.exe`를 직접 사용하는 것입니다.
+pip가 만드는 `.venv\Scripts\kpr.exe`는 프로젝트 경로에 한글이나 공백이
+있으면 `Fatal Python error`와 `UnicodeDecodeError`가 발생할 수 있습니다.
+따라서 이 파일을 사용하지 않고, 프로젝트 최상위의 `kpr.bat`을 사용합니다.
+`kpr.bat`은 가상환경의 Python으로 모듈을 직접 실행하므로 해당 진입점
+인코딩 문제를 피합니다.
 
 CMD:
 
 ```bat
-.venv\Scripts\kpr.exe --help
+kpr.bat --help
 ```
 
 PowerShell:
 
 ```powershell
-.\.venv\Scripts\kpr.exe --help
+.\kpr.bat --help
 ```
 
-아래 문서의 명령에서 CMD는 `.venv\Scripts\kpr.exe`, PowerShell은
-`.\.venv\Scripts\kpr.exe`를 사용하면 됩니다.
+래퍼 없이 같은 방식으로 직접 실행할 수도 있습니다.
 
-### 가상환경을 활성화해서 `kpr`만 사용하기
+```bat
+.venv\Scripts\python.exe -m korean_prompt_robustness --help
+```
+
+아래 문서의 명령에서 CMD는 `kpr.bat`, PowerShell은
+`.\kpr.bat`를 사용하면 됩니다.
+
+### 가상환경을 활성화해서 직접 실행하기
 
 CMD:
 
 ```bat
 .venv\Scripts\activate.bat
-kpr --help
+python -m korean_prompt_robustness --help
 ```
 
 PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-kpr --help
+python -m korean_prompt_robustness --help
 ```
 
 PowerShell 실행 정책 오류가 발생하면 활성화를 시도하지 말고
-`.\.venv\Scripts\kpr.exe`를 직접 사용하세요.
+`.\kpr.bat`를 직접 사용하세요.
 
 ### 설치 파일 확인
 
 CMD:
 
 ```bat
-dir .venv\Scripts\kpr.exe
+dir kpr.bat
 ```
 
 PowerShell:
 
 ```powershell
-Get-Item .\.venv\Scripts\kpr.exe
+Get-Item .\kpr.bat
 ```
 
 파일이 없다면 프로젝트 폴더에서 `install_windows.bat`을 다시 실행합니다.
@@ -285,7 +295,7 @@ ollama pull llama3.2:1b
 CMD:
 
 ```bat
-.venv\Scripts\kpr.exe configure ^
+kpr.bat configure ^
   --test local --test-model llama3.2:1b ^
   --judge gemini --judge-model gemini-3.6-flash
 ```
@@ -293,7 +303,7 @@ CMD:
 PowerShell에서는 한 줄로 실행하는 것이 간단합니다.
 
 ```powershell
-.\.venv\Scripts\kpr.exe configure --test local --test-model llama3.2:1b --judge gemini --judge-model gemini-3.6-flash
+.\kpr.bat configure --test local --test-model llama3.2:1b --judge gemini --judge-model gemini-3.6-flash
 ```
 
 ### Gemini 3.6 테스트 / Gemini 3.7 Judge
@@ -301,7 +311,7 @@ PowerShell에서는 한 줄로 실행하는 것이 간단합니다.
 CMD:
 
 ```bat
-.venv\Scripts\kpr.exe configure ^
+kpr.bat configure ^
   --test gemini --test-model gemini-3.6-flash ^
   --judge gemini --judge-model gemini-3.7-flash
 ```
@@ -312,7 +322,7 @@ CMD:
 ### 테스트와 Judge 모두 같은 로컬 모델
 
 ```bat
-.venv\Scripts\kpr.exe configure ^
+kpr.bat configure ^
   --test local --test-model llama3.2:1b ^
   --judge local --judge-model llama3.2:1b
 ```
@@ -323,7 +333,7 @@ CMD:
 ### 테스트와 Judge가 서로 다른 로컬 모델
 
 ```bat
-.venv\Scripts\kpr.exe configure ^
+kpr.bat configure ^
   --test local --test-model 테스트-모델-NAME ^
   --judge local --judge-model Judge-모델-NAME
 ```
@@ -333,7 +343,7 @@ CMD:
 모델 ID와 Base URL은 API 제공업체 문서의 실제 값으로 바꿔야 합니다.
 
 ```bat
-.venv\Scripts\kpr.exe configure ^
+kpr.bat configure ^
   --test local --test-model llama3.2:1b ^
   --judge openai-compatible ^
   --judge-model 실제-Judge-모델-ID ^
@@ -348,13 +358,13 @@ OpenAI 호환 방식은 Bearer 인증, `POST /chat/completions`,
 CMD:
 
 ```bat
-.venv\Scripts\kpr.exe show-config
+kpr.bat show-config
 ```
 
 PowerShell:
 
 ```powershell
-.\.venv\Scripts\kpr.exe show-config
+.\kpr.bat show-config
 ```
 
 예전 버전의 `api` 설정이 남아 있다는 오류가 나오면 위의 `configure`
@@ -378,7 +388,7 @@ data\examples\problems.jsonl
 파일 검증:
 
 ```bat
-.venv\Scripts\kpr.exe validate data\examples\problems.jsonl
+kpr.bat validate data\examples\problems.jsonl
 ```
 
 정상이면 다음처럼 표시됩니다.
@@ -392,19 +402,19 @@ data\examples\problems.jsonl
 한 문제만 먼저 시험하는 것을 권장합니다.
 
 ```bat
-.venv\Scripts\kpr.exe run data\examples\problems.jsonl --limit 1
+kpr.bat run data\examples\problems.jsonl --limit 1
 ```
 
 앞의 5문제 실행:
 
 ```bat
-.venv\Scripts\kpr.exe run data\examples\problems.jsonl --limit 5
+kpr.bat run data\examples\problems.jsonl --limit 5
 ```
 
 전체 문제 실행:
 
 ```bat
-.venv\Scripts\kpr.exe run data\examples\problems.jsonl
+kpr.bat run data\examples\problems.jsonl
 ```
 
 콘솔에는 문제별로 다음 내용이 순서대로 표시됩니다.
@@ -440,16 +450,16 @@ install_windows.bat
 ### `kpr`은 내부 또는 외부 명령이 아닙니다
 
 ```bat
-.venv\Scripts\kpr.exe --help
+kpr.bat --help
 ```
 
 PowerShell에서는:
 
 ```powershell
-.\.venv\Scripts\kpr.exe --help
+.\kpr.bat --help
 ```
 
-### `.venv\Scripts\kpr.exe`를 찾을 수 없습니다
+### `kpr.bat`를 찾을 수 없습니다
 
 현재 폴더에 `install_windows.bat`이 있는지 확인한 뒤 다시 실행합니다.
 

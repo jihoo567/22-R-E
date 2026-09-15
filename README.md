@@ -35,6 +35,7 @@ GitHub 저장소의 현재 주요 파일은 다음과 같습니다.
 ├── tests/
 │   └── test_framework.py
 ├── install_windows.bat
+├── kpr.bat
 ├── run_gemini_5_windows.bat
 ├── run_local_windows.bat
 ├── WINDOWS_INSTALL.md
@@ -80,19 +81,21 @@ Windows 설치 과정은 `.venv`를 만들고 프로그램과 테스트를 설�
 
 ### Windows에서 `kpr`을 인식하지 못할 때
 
-`kpr`은 Windows 전체 PATH가 아니라 프로젝트의 `.venv` 안에 설치됩니다.
-따라서 아래처럼 실행하는 것이 가장 확실합니다.
+`kpr`은 Windows 전체 PATH에 등록되지 않습니다. 또한 pip가 만드는
+`.venv\Scripts\kpr.exe`는 한글·공백 경로에서 인코딩 오류가 날 수 있어
+사용하지 않습니다. 프로젝트 루트의 UTF-8 안전 실행 파일을 사용하세요.
 
 ```bat
-.venv\Scripts\kpr.exe --help
+kpr.bat --help
 ```
 
-모든 Windows 예시는 `.venv\Scripts\kpr.exe`를 기준으로 사용할 수
-있습니다. 또는 다음 명령으로 가상환경을 활성화한 뒤 `kpr`을 입력합니다.
+모든 Windows 예시는 `kpr.bat`를 기준으로 합니다. PowerShell에서는
+`kpr.bat` 앞에 `.\`를 붙여 `.\kpr.bat --help`로 실행합니다. 또는 다음
+명령으로 가상환경을 활성화한 뒤 Python 모듈을 직접 실행할 수 있습니다.
 
 ```bat
 .venv\Scripts\activate.bat
-kpr --help
+python -m korean_prompt_robustness --help
 ```
 
 ## macOS 설치
@@ -138,7 +141,7 @@ macOS 검증:
 Windows 검증:
 
 ```bat
-.venv\Scripts\kpr.exe validate data\examples\problems.jsonl
+kpr.bat validate data\examples\problems.jsonl
 ```
 
 ## API 키 입력
@@ -187,7 +190,7 @@ macOS:
 Windows:
 
 ```bat
-.venv\Scripts\kpr.exe configure ^
+kpr.bat configure ^
   --test local --test-model llama3.2:1b ^
   --judge gemini --judge-model gemini-3.6-flash
 ```
@@ -246,7 +249,7 @@ macOS:
 Windows:
 
 ```bat
-.venv\Scripts\kpr.exe show-config
+kpr.bat show-config
 ```
 
 허용되는 방식은 `local`, `gemini`, `openai-compatible`뿐입니다. 예전
@@ -263,7 +266,7 @@ macOS에서 한 문제 실행:
 Windows에서 한 문제 실행:
 
 ```bat
-.venv\Scripts\kpr.exe run data\examples\problems.jsonl --limit 1
+kpr.bat run data\examples\problems.jsonl --limit 1
 ```
 
 앞의 5문제 실행:
