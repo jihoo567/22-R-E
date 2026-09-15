@@ -10,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from korean_prompt_robustness.cli import main
+from korean_prompt_robustness.cli import DEFAULT_SETTINGS_PATH, main
 from korean_prompt_robustness.config import (
     ProviderSettings,
     RunConfig,
@@ -22,7 +22,7 @@ from korean_prompt_robustness.judges.base import JudgeAdapter
 from korean_prompt_robustness.judges.local import LocalCommandJudge
 from korean_prompt_robustness.judges.prompt import build_judge_prompt
 from korean_prompt_robustness.local_process import command_executable, prepare_command
-from korean_prompt_robustness.models.base import ModelAdapter, ModelOutput
+from korean_prompt_robustness.models.base import ModelAdapter
 from korean_prompt_robustness.models.local import LocalCommandModel
 from korean_prompt_robustness.models.openai_compatible import (
     call_openai_compatible,
@@ -49,14 +49,12 @@ def local_settings(model_id: str = "local-test") -> ProviderSettings:
         provider="local",
         model_id=model_id,
         command=stdin_echo_command(),
-        max_retries=0,
     )
 
 
 class StaticModel(ModelAdapter):
     def generate(self, problem, settings):
-        text = f"테스트 답변: {problem.id}"
-        return ModelOutput(text, {"text": text})
+        return f"테스트 답변: {problem.id}"
 
 
 class StaticJudge(JudgeAdapter):
@@ -69,6 +67,9 @@ class StaticJudge(JudgeAdapter):
 
 
 class SchemaAndConfigTests(unittest.TestCase):
+    def test_default_settings_are_stored_in_the_working_project(self):
+        self.assertEqual(Path.cwd() / ".kpr" / "config.json", DEFAULT_SETTINGS_PATH)
+
     def test_minimal_problem_schema(self):
         problems = validate_dataset([problem_record()])
         self.assertEqual("problem-001", problems[0].id)
@@ -162,7 +163,7 @@ class AdapterTests(unittest.TestCase):
     def test_local_model_preserves_utf8_stdin_and_stdout(self):
         problem = validate_dataset([problem_record()])[0]
         output = LocalCommandModel().generate(problem, local_settings())
-        self.assertEqual(problem.prompt, output.text)
+        self.assertEqual(problem.prompt, output)
 
     def test_local_judge_preserves_utf8_stdin_and_stdout(self):
         problem = validate_dataset([problem_record()])[0]
@@ -185,7 +186,6 @@ class AdapterTests(unittest.TestCase):
                 "model_id": "example-model",
                 "base_url": "https://example.test/v1",
                 "api_key_env": "KPR_TEST_API_KEY",
-                "max_retries": 0,
             },
             "test_model",
         )
@@ -230,16 +230,15 @@ class PipelineTests(unittest.TestCase):
         config = RunConfig(local_settings("test"), local_settings("judge"))
         output = io.StringIO()
 
-        results = run_benchmark(
-            problems, config, StaticModel(), judge, output=output
-        )
+        failures = run_benchmark(problems, config, StaticModel(), judge, output=output)
 
         printed = output.getvalue()
         self.assertIn("[테스트 모델 답변]", printed)
         self.assertIn("테스트 답변: problem-001", printed)
         self.assertIn("[Judge 모델 답변]", printed)
         self.assertIn("Judge 답변:", printed)
-        self.assertEqual(results[0]["test_response"], judge.received_response)
+        self.assertEqual(0, failures)
+        self.assertEqual("테스트 답변: problem-001", judge.received_response)
 
     def test_configure_then_run_uses_console_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -279,6 +278,43 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(["config.json", "problems.jsonl"], created_files)
         self.assertIn("[테스트 모델 답변]", stdout.getvalue())
         self.assertIn("[Judge 모델 답변]", stdout.getvalue())
+
+    def test_cli_exits_with_error_when_a_model_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            settings_path = base / "config.json"
+            input_path = base / "problems.jsonl"
+            input_path.write_text(
+                json.dumps(problem_record(), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            failing_command = f'"{sys.executable}" -c "raise SystemExit(1)"'
+            with redirect_stdout(io.StringIO()):
+                main(
+                    [
+                        "configure",
+                        "--test",
+                        "local",
+                        "--judge",
+                        "local",
+                        "--test-command",
+                        failing_command,
+                        "--settings",
+                        str(settings_path),
+                    ]
+                )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr), self.assertRaises(
+                SystemExit
+            ) as raised:
+                main(["run", str(input_path), "--settings", str(settings_path)])
+
+        self.assertEqual(2, raised.exception.code)
+        self.assertIn(
+            "1개 문제에서 모델 실행 또는 평가가 실패했습니다",
+            stderr.getvalue(),
+        )
 
 
 if __name__ == "__main__":

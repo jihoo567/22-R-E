@@ -27,8 +27,6 @@ class ProviderSettings:
     temperature: float = 0.0
     seed: int | None = None
     max_tokens: int = 1024
-    max_retries: int = 2
-    retry_delay_seconds: float = 1.0
     timeout_seconds: float = 120.0
 
     @classmethod
@@ -70,18 +68,16 @@ class ProviderSettings:
             temperature=float(value.get("temperature", 0.0)),
             seed=value.get("seed"),
             max_tokens=int(value.get("max_tokens", 1024)),
-            max_retries=int(value.get("max_retries", 2)),
-            retry_delay_seconds=float(value.get("retry_delay_seconds", 1.0)),
             timeout_seconds=float(value.get("timeout_seconds", 120.0)),
         )
         if settings.seed is not None and (
             isinstance(settings.seed, bool) or not isinstance(settings.seed, int)
         ):
             raise ValueError(f"{field_name}.seed는 정수 또는 null이어야 합니다.")
-        if settings.max_tokens <= 0 or settings.max_retries < 0:
-            raise ValueError("max_tokens는 양수, max_retries는 0 이상이어야 합니다.")
-        if settings.timeout_seconds <= 0 or settings.retry_delay_seconds < 0:
-            raise ValueError("timeout_seconds는 양수, retry_delay_seconds는 0 이상이어야 합니다.")
+        if settings.max_tokens <= 0:
+            raise ValueError("max_tokens는 양수여야 합니다.")
+        if settings.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds는 양수여야 합니다.")
         return settings
 
     def public_dict(self) -> dict[str, Any]:

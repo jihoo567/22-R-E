@@ -14,7 +14,6 @@ class Problem:
     id: str
     prompt: str
     metadata: dict[str, Any]
-    raw: dict[str, Any]
 
     @classmethod
     def from_dict(cls, value: dict[str, Any], index: int) -> "Problem":
@@ -27,7 +26,7 @@ class Problem:
             raise ValueError(f"항목 {index}: prompt가 필요합니다.")
         if not isinstance(metadata, dict):
             raise ValueError(f"항목 {index}: metadata는 객체여야 합니다.")
-        return cls(problem_id, prompt, metadata, dict(value))
+        return cls(problem_id, prompt, metadata)
 
 
 def validate_dataset(records: list[dict[str, Any]]) -> list[Problem]:

@@ -22,7 +22,9 @@ from .runners import run_benchmark
 from .schemas import load_and_validate_dataset
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 모든 안내와 Windows 래퍼는 프로젝트 루트에서 CLI를 실행합니다.
+# 설치 위치가 아닌 실행 위치를 기준으로 .env와 .kpr을 찾습니다.
+PROJECT_ROOT = Path.cwd()
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / ".kpr" / "config.json"
 DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
@@ -149,7 +151,7 @@ def _configure(args: argparse.Namespace) -> None:
             api_key_env=(
                 "KPR_TEST_API_KEY" if args.test != "local" else None
             ),
-            timeout_seconds=600.0 if args.test == "local" else 120.0,
+            timeout_seconds=300.0 if args.test == "local" else 120.0,
         ),
         judge_model=make_provider_settings(
             args.judge,
@@ -159,7 +161,7 @@ def _configure(args: argparse.Namespace) -> None:
             api_key_env=(
                 "KPR_JUDGE_API_KEY" if args.judge != "local" else None
             ),
-            timeout_seconds=600.0 if args.judge == "local" else 120.0,
+            timeout_seconds=300.0 if args.judge == "local" else 120.0,
         ),
     )
     save_config(args.settings, config)
@@ -189,12 +191,14 @@ def _run(args: argparse.Namespace) -> None:
     print(
         f"Judge 모델: {config.judge_model.provider} / {config.judge_model.model_id}"
     )
-    run_benchmark(
+    failed = run_benchmark(
         problems,
         config,
         create_model(config.test_model),
         create_judge(config.judge_model),
     )
+    if failed:
+        raise RuntimeError(f"{failed}개 문제에서 모델 실행 또는 평가가 실패했습니다.")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -213,7 +217,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"검증 성공: {len(problems)}개 문제")
         else:
             _run(args)
-    except (OSError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         parser.error(str(error))
 
 

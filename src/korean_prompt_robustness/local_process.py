@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 
 
 def prepare_command(command: str, *, platform: str | None = None) -> str | list[str]:
@@ -28,3 +29,28 @@ def command_executable(command: str, *, platform: str | None = None) -> str:
     if not arguments:
         raise ValueError("로컬 모델 명령이 비어 있습니다.")
     return arguments[0].strip('"')
+
+
+def run_local_command(
+    command: str,
+    input_text: str,
+    timeout_seconds: float,
+    *,
+    label: str,
+) -> str:
+    """UTF-8 stdin/stdout으로 로컬 명령을 한 번 실행합니다."""
+    completed = subprocess.run(
+        prepare_command(command),
+        input=input_text,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if completed.returncode != 0:
+        error = completed.stderr.strip() or "오류 내용 없음"
+        raise RuntimeError(f"{label} 종료 코드 {completed.returncode}: {error}")
+    if completed.stdout == "":
+        raise RuntimeError(f"{label}이 빈 stdout을 반환했습니다.")
+    return completed.stdout

@@ -10,7 +10,7 @@ from typing import Any
 from ..auth import require_api_key
 from ..config import ProviderSettings
 from ..schemas import Problem
-from .base import ModelAdapter, ModelOutput
+from .base import ModelAdapter
 
 
 def call_openai_compatible(
@@ -86,6 +86,6 @@ def extract_openai_text(response: dict[str, Any]) -> str:
 
 
 class OpenAICompatibleModel(ModelAdapter):
-    def generate(self, problem: Problem, settings: ProviderSettings) -> ModelOutput:
+    def generate(self, problem: Problem, settings: ProviderSettings) -> str:
         response = call_openai_compatible(prompt=problem.prompt, settings=settings)
-        return ModelOutput(extract_openai_text(response), response)
+        return extract_openai_text(response)

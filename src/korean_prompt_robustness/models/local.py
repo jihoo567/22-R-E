@@ -2,39 +2,19 @@
 
 from __future__ import annotations
 
-import subprocess
-
 from ..config import ProviderSettings
-from ..local_process import prepare_command
+from ..local_process import run_local_command
 from ..schemas import Problem
-from .base import ModelAdapter, ModelOutput
+from .base import ModelAdapter
 
 
 class LocalCommandModel(ModelAdapter):
-    def generate(self, problem: Problem, settings: ProviderSettings) -> ModelOutput:
+    def generate(self, problem: Problem, settings: ProviderSettings) -> str:
         if not settings.command:
             raise ValueError("local provider에는 model.command가 필요합니다.")
-        command = prepare_command(settings.command)
-        completed = subprocess.run(
-            command,
-            input=problem.prompt,
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            timeout=settings.timeout_seconds,
-            check=False,
-        )
-        if completed.returncode != 0:
-            error = completed.stderr.strip() or "오류 내용 없음"
-            raise RuntimeError(f"로컬 모델 종료 코드 {completed.returncode}: {error}")
-        # strip이나 후처리를 하지 않아 stdout 원문을 그대로 보존합니다.
-        if completed.stdout == "":
-            raise RuntimeError("로컬 모델이 빈 stdout을 반환했습니다.")
-        return ModelOutput(
-            text=completed.stdout,
-            raw_provider_response={
-                "stdout": completed.stdout,
-                "stderr": completed.stderr,
-                "returncode": completed.returncode,
-            },
+        return run_local_command(
+            settings.command,
+            problem.prompt,
+            settings.timeout_seconds,
+            label="로컬 모델",
         )

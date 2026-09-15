@@ -11,7 +11,7 @@ from typing import Any
 from ..auth import require_api_key
 from ..config import ProviderSettings
 from ..schemas import Problem
-from .base import ModelAdapter, ModelOutput
+from .base import ModelAdapter
 
 
 def call_gemini(
@@ -19,7 +19,6 @@ def call_gemini(
     prompt: str,
     settings: ProviderSettings,
     system_instruction: str | None = None,
-    response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     api_key = require_api_key(settings)
     model_id = urllib.parse.quote(settings.model_id, safe="-._")
@@ -33,9 +32,6 @@ def call_gemini(
     }
     if settings.seed is not None:
         generation_config["seed"] = settings.seed
-    if response_schema is not None:
-        generation_config["responseMimeType"] = "application/json"
-        generation_config["responseSchema"] = response_schema
     body: dict[str, Any] = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": generation_config,
@@ -72,6 +68,6 @@ def extract_text(response: dict[str, Any]) -> str:
 
 
 class GeminiModel(ModelAdapter):
-    def generate(self, problem: Problem, settings: ProviderSettings) -> ModelOutput:
+    def generate(self, problem: Problem, settings: ProviderSettings) -> str:
         response = call_gemini(prompt=problem.prompt, settings=settings)
-        return ModelOutput(extract_text(response), response)
+        return extract_text(response)
