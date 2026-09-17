@@ -3,22 +3,37 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from typing import TextIO
 
-from ..config import RunConfig
-from ..judges import JudgeAdapter
-from ..judges.prompt import build_judge_prompt
-from ..models import ModelAdapter
-from ..schemas import Problem
+from .config import RunConfig
+from .dataset import Problem
+from .providers import generate_text
+
+
+JUDGE_INSTRUCTION = "당신은 테스트 모델의 답변을 검토하는 독립 평가자입니다."
+
+
+def build_judge_prompt(problem: Problem, response: str) -> str:
+    return f"""다음 문제와 테스트 모델의 답변을 검토하고 평가 결과를 작성하세요.
+별도의 채점 기준이나 점수 형식은 제공되지 않습니다.
+
+<problem>
+{problem.prompt}
+</problem>
+
+<test_model_response>
+{response}
+</test_model_response>
+"""
 
 
 def run_benchmark(
     problems: list[Problem],
     config: RunConfig,
-    model: ModelAdapter,
-    judge: JudgeAdapter,
     *,
     output: TextIO | None = None,
+    generate: Callable[..., str] = generate_text,
 ) -> int:
     """결과 파일 없이 두 모델의 원문 응답을 콘솔에 출력합니다."""
     stream = output or sys.stdout
@@ -32,7 +47,7 @@ def run_benchmark(
         print(problem.prompt, file=stream, flush=True)
 
         try:
-            test_response = model.generate(problem, config.test_model)
+            test_response = generate(problem.prompt, config.test_model)
         except Exception as error:
             print("\n[테스트 모델 답변]", file=stream)
             print(f"생성 실패: {type(error).__name__}: {error}", file=stream, flush=True)
@@ -43,24 +58,17 @@ def run_benchmark(
         print(test_response, file=stream, flush=True)
 
         rendered_prompt = build_judge_prompt(problem, test_response)
-        judge_error: Exception | None = None
+        print("\n[Judge 모델 답변]", file=stream)
         try:
-            judge_response = judge.judge(
-                problem,
-                test_response,
+            judge_response = generate(
                 rendered_prompt,
                 config.judge_model,
+                system_instruction=JUDGE_INSTRUCTION,
             )
         except Exception as error:
-            judge_response = None
-            judge_error = error
             failures += 1
-
-        print("\n[Judge 모델 답변]", file=stream)
-        if judge_response is None:
-            assert judge_error is not None
             print(
-                f"평가 실패: {type(judge_error).__name__}: {judge_error}",
+                f"평가 실패: {type(error).__name__}: {error}",
                 file=stream,
                 flush=True,
             )

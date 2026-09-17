@@ -1,16 +1,11 @@
 """OpenAI 호환 Chat Completions API 어댑터."""
 
 from __future__ import annotations
-
-import json
-import urllib.error
-import urllib.request
 from typing import Any
 
 from ..auth import require_api_key
 from ..config import ProviderSettings
-from ..schemas import Problem
-from .base import ModelAdapter
+from .http import post_json
 
 
 def call_openai_compatible(
@@ -43,25 +38,13 @@ def call_openai_compatible(
     if settings.seed is not None:
         body["seed"] = settings.seed
 
-    request = urllib.request.Request(
+    return post_json(
         url,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
+        body,
+        {"Authorization": f"Bearer {api_key}"},
+        timeout=settings.timeout_seconds,
+        label="OpenAI 호환 API",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        # 응답 본문에 민감한 요청 정보가 있을 수 있어 상태 코드만 노출합니다.
-        raise RuntimeError(f"OpenAI 호환 API HTTP 오류: {error.code}") from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"OpenAI 호환 API 연결 오류: {error.reason}") from error
-    except json.JSONDecodeError as error:
-        raise RuntimeError("OpenAI 호환 API 응답이 JSON이 아닙니다.") from error
 
 
 def extract_openai_text(response: dict[str, Any]) -> str:
@@ -83,9 +66,3 @@ def extract_openai_text(response: dict[str, Any]) -> str:
         if text:
             return text
     raise RuntimeError("OpenAI 호환 API가 빈 텍스트 응답을 반환했습니다.")
-
-
-class OpenAICompatibleModel(ModelAdapter):
-    def generate(self, problem: Problem, settings: ProviderSettings) -> str:
-        response = call_openai_compatible(prompt=problem.prompt, settings=settings)
-        return extract_openai_text(response)

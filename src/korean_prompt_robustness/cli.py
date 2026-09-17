@@ -10,22 +10,20 @@ from pathlib import Path
 
 from .auth import FALLBACK_KEY_ENVS, find_api_key
 from .config import (
+    ProviderSettings,
     RunConfig,
     load_config,
     make_provider_settings,
     save_config,
 )
-from .judges import create_judge
+from .dataset import load_and_validate_dataset
 from .local_process import command_executable
-from .models import create_model
-from .runners import run_benchmark
-from .schemas import load_and_validate_dataset
+from .pipeline import run_benchmark
 
 
 # 모든 안내와 Windows 래퍼는 프로젝트 루트에서 CLI를 실행합니다.
 # 설치 위치가 아닌 실행 위치를 기준으로 .env와 .kpr을 찾습니다.
-PROJECT_ROOT = Path.cwd()
-DEFAULT_SETTINGS_PATH = PROJECT_ROOT / ".kpr" / "config.json"
+DEFAULT_SETTINGS_PATH = Path(".kpr") / "config.json"
 DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
 PROVIDER_CHOICES = ("local", "gemini", "openai-compatible")
@@ -102,26 +100,20 @@ def build_parser() -> argparse.ArgumentParser:
     configure = subparsers.add_parser(
         "configure", help="테스트 모델과 Judge 모델을 먼저 설정"
     )
-    configure.add_argument(
-        "--test", choices=PROVIDER_CHOICES, required=True, help="테스트 모델 방식"
-    )
-    configure.add_argument(
-        "--judge", choices=PROVIDER_CHOICES, required=True, help="Judge 모델 방식"
-    )
-    configure.add_argument("--test-model", help="테스트 모델 ID")
-    configure.add_argument("--judge-model", help="Judge 모델 ID")
-    configure.add_argument(
-        "--test-command", help="테스트 로컬 명령(기본값: ollama run <모델 ID>)"
-    )
-    configure.add_argument(
-        "--judge-command", help="Judge 로컬 명령(기본값: ollama run <모델 ID>)"
-    )
-    configure.add_argument(
-        "--test-base-url", help="테스트 OpenAI 호환 API의 base URL"
-    )
-    configure.add_argument(
-        "--judge-base-url", help="Judge OpenAI 호환 API의 base URL"
-    )
+    for role, label in (("test", "테스트"), ("judge", "Judge")):
+        configure.add_argument(
+            f"--{role}",
+            choices=PROVIDER_CHOICES,
+            required=True,
+            help=f"{label} 모델 방식",
+        )
+        configure.add_argument(f"--{role}-model", help=f"{label} 모델 ID")
+        configure.add_argument(
+            f"--{role}-command", help=f"{label} 로컬 명령(기본값: ollama run <모델 ID>)"
+        )
+        configure.add_argument(
+            f"--{role}-base-url", help=f"{label} OpenAI 호환 API의 base URL"
+        )
     _add_settings_argument(configure)
 
     show = subparsers.add_parser("show-config", help="현재 사전 설정 표시")
@@ -139,51 +131,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _configure(args: argparse.Namespace) -> None:
-    test_model_id = _model_id(args.test, args.test_model, "테스트 모델")
-    judge_model_id = _model_id(args.judge, args.judge_model, "Judge 모델")
-    config = RunConfig(
-        test_model=make_provider_settings(
-            args.test,
-            test_model_id,
-            args.test_command,
-            base_url=args.test_base_url,
-            api_key_env=(
-                "KPR_TEST_API_KEY" if args.test != "local" else None
-            ),
-            timeout_seconds=300.0 if args.test == "local" else 120.0,
-        ),
-        judge_model=make_provider_settings(
-            args.judge,
-            judge_model_id,
-            args.judge_command,
-            base_url=args.judge_base_url,
-            api_key_env=(
-                "KPR_JUDGE_API_KEY" if args.judge != "local" else None
-            ),
-            timeout_seconds=300.0 if args.judge == "local" else 120.0,
-        ),
+def _settings_for_role(args: argparse.Namespace, role: str) -> ProviderSettings:
+    provider = getattr(args, role)
+    model_id = _model_id(provider, getattr(args, f"{role}_model"), role)
+    return make_provider_settings(
+        provider,
+        model_id,
+        getattr(args, f"{role}_command"),
+        base_url=getattr(args, f"{role}_base_url"),
+        api_key_env=f"KPR_{role.upper()}_API_KEY" if provider != "local" else None,
+        timeout_seconds=300.0 if provider == "local" else 120.0,
     )
+
+
+def _configure(args: argparse.Namespace) -> None:
+    config = RunConfig(_settings_for_role(args, "test"), _settings_for_role(args, "judge"))
     save_config(args.settings, config)
     print(f"사전 설정 완료: {args.settings}")
-    print(f"테스트 모델: {args.test} / {test_model_id}")
-    print(f"Judge 모델: {args.judge} / {judge_model_id}")
-    if args.test != "local":
-        print("테스트 API 키: .env의 KPR_TEST_API_KEY")
-    if args.judge != "local":
-        print("Judge API 키: .env의 KPR_JUDGE_API_KEY")
+    for label, settings in (("테스트", config.test_model), ("Judge", config.judge_model)):
+        print(f"{label} 모델: {settings.provider} / {settings.model_id}")
+        if settings.api_key_env:
+            print(f"{label} API 키: .env의 {settings.api_key_env}")
 
 
 def _run(args: argparse.Namespace) -> None:
     config = load_config(args.settings)
     _validate_runtime(config)
-    problems = load_and_validate_dataset(args.input)
-    if args.limit is not None:
-        if args.limit <= 0:
-            raise ValueError("--limit은 1 이상의 정수여야 합니다.")
-        problems = problems[: args.limit]
-    if not problems:
-        raise ValueError("실행할 문제가 없습니다.")
+    problems = load_and_validate_dataset(args.input, limit=args.limit)
 
     print(
         f"테스트 모델: {config.test_model.provider} / {config.test_model.model_id}"
@@ -191,22 +165,17 @@ def _run(args: argparse.Namespace) -> None:
     print(
         f"Judge 모델: {config.judge_model.provider} / {config.judge_model.model_id}"
     )
-    failed = run_benchmark(
-        problems,
-        config,
-        create_model(config.test_model),
-        create_judge(config.judge_model),
-    )
+    failed = run_benchmark(problems, config)
     if failed:
         raise RuntimeError(f"{failed}개 문제에서 모델 실행 또는 평가가 실패했습니다.")
 
 
 def main(argv: list[str] | None = None) -> None:
-    _load_env_file(PROJECT_ROOT / ".env")
     parser = build_parser()
     args = parser.parse_args(argv)
 
     try:
+        _load_env_file(Path(".env"))
         if args.command == "configure":
             _configure(args)
         elif args.command == "show-config":

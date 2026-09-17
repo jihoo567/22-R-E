@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 from ..auth import require_api_key
 from ..config import ProviderSettings
-from ..schemas import Problem
-from .base import ModelAdapter
+from .http import post_json
 
 
 def call_gemini(
@@ -38,36 +34,26 @@ def call_gemini(
     }
     if system_instruction:
         body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-    request = urllib.request.Request(
+    return post_json(
         url,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-        method="POST",
+        body,
+        {"x-goog-api-key": api_key},
+        timeout=settings.timeout_seconds,
+        label="Gemini API",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        # 응답 본문에는 요청/키 정보가 섞일 수 있어 상태 코드만 기록합니다.
-        raise RuntimeError(f"Gemini API HTTP 오류: {error.code}") from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"Gemini API 연결 오류: {error.reason}") from error
-    except json.JSONDecodeError as error:
-        raise RuntimeError("Gemini API 응답이 JSON이 아닙니다.") from error
 
 
 def extract_text(response: dict[str, Any]) -> str:
     try:
         parts = response["candidates"][0]["content"]["parts"]
-        texts = [part["text"] for part in parts if isinstance(part.get("text"), str)]
+        texts = [
+            part["text"]
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        ]
     except (KeyError, IndexError, TypeError) as error:
         raise RuntimeError("Gemini 응답에서 텍스트 candidate를 찾지 못했습니다.") from error
-    if not texts:
+    text = "".join(texts)
+    if not text:
         raise RuntimeError("Gemini가 빈 텍스트 응답을 반환했습니다.")
-    return "".join(texts)
-
-
-class GeminiModel(ModelAdapter):
-    def generate(self, problem: Problem, settings: ProviderSettings) -> str:
-        response = call_gemini(prompt=problem.prompt, settings=settings)
-        return extract_text(response)
+    return text

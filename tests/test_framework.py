@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -18,18 +19,15 @@ from korean_prompt_robustness.config import (
     make_provider_settings,
     save_config,
 )
-from korean_prompt_robustness.judges.base import JudgeAdapter
-from korean_prompt_robustness.judges.local import LocalCommandJudge
-from korean_prompt_robustness.judges.prompt import build_judge_prompt
 from korean_prompt_robustness.local_process import command_executable, prepare_command
-from korean_prompt_robustness.models.base import ModelAdapter
-from korean_prompt_robustness.models.local import LocalCommandModel
-from korean_prompt_robustness.models.openai_compatible import (
-    call_openai_compatible,
-    extract_openai_text,
+from korean_prompt_robustness.providers import generate_text
+from korean_prompt_robustness.providers.gemini import extract_text
+from korean_prompt_robustness.pipeline import (
+    JUDGE_INSTRUCTION,
+    build_judge_prompt,
+    run_benchmark,
 )
-from korean_prompt_robustness.runners import run_benchmark
-from korean_prompt_robustness.schemas.problem import validate_dataset
+from korean_prompt_robustness.dataset import load_and_validate_dataset, validate_dataset
 
 
 def problem_record(problem_id: str = "problem-001") -> dict:
@@ -52,23 +50,11 @@ def local_settings(model_id: str = "local-test") -> ProviderSettings:
     )
 
 
-class StaticModel(ModelAdapter):
-    def generate(self, problem, settings):
-        return f"테스트 답변: {problem.id}"
-
-
-class StaticJudge(JudgeAdapter):
-    def __init__(self) -> None:
-        self.received_response: str | None = None
-
-    def judge(self, problem, response, rendered_prompt, settings):
-        self.received_response = response
-        return f"Judge 답변: {response}를 검토했습니다."
-
-
 class SchemaAndConfigTests(unittest.TestCase):
     def test_default_settings_are_stored_in_the_working_project(self):
-        self.assertEqual(Path.cwd() / ".kpr" / "config.json", DEFAULT_SETTINGS_PATH)
+        self.assertEqual(
+            Path.cwd() / ".kpr" / "config.json", DEFAULT_SETTINGS_PATH.resolve()
+        )
 
     def test_minimal_problem_schema(self):
         problems = validate_dataset([problem_record()])
@@ -78,6 +64,42 @@ class SchemaAndConfigTests(unittest.TestCase):
     def test_duplicate_problem_id_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "중복"):
             validate_dataset([problem_record(), problem_record()])
+
+    def test_blank_prompt_is_rejected(self):
+        record = problem_record()
+        record["prompt"] = "   "
+        with self.assertRaisesRegex(ValueError, "prompt"):
+            validate_dataset([record])
+
+    def test_limit_retains_only_requested_problems_but_validates_the_whole_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "문제.jsonl"
+            records = [problem_record(str(index)) for index in range(100)]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records), encoding="utf-8"
+            )
+            self.assertEqual(1, len(load_and_validate_dataset(path, limit=1)))
+            with self.assertRaisesRegex(ValueError, "1 이상"):
+                load_and_validate_dataset(path, limit=0)
+            with path.open("a", encoding="utf-8") as file:
+                file.write("\n" + json.dumps(records[0]))
+            with self.assertRaisesRegex(ValueError, "중복"):
+                load_and_validate_dataset(path, limit=1)
+
+    def test_default_paths_follow_working_directory_after_import(self):
+        original = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ):
+            base = Path(directory)
+            (base / ".env").write_text("KPR_PATH_TEST=loaded\n", encoding="utf-8")
+            os.environ.pop("KPR_PATH_TEST", None)
+            try:
+                os.chdir(base)
+                with redirect_stdout(io.StringIO()):
+                    main(["configure", "--test", "local", "--judge", "local"])
+                self.assertTrue((base / ".kpr" / "config.json").exists())
+                self.assertEqual("loaded", os.environ["KPR_PATH_TEST"])
+            finally:
+                os.chdir(original)
 
     def test_configure_supports_gemini_and_local_separately(self):
         config = RunConfig(
@@ -152,6 +174,10 @@ class SchemaAndConfigTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
+    def test_unknown_provider_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "지원하지 않는"):
+            generate_text("질문", ProviderSettings("unknown", "model"))
+
     def test_windows_command_keeps_quoted_path_intact(self):
         command = '"C:\\Program Files\\Python\\python.exe" -c "print(1)"'
         self.assertEqual(command, prepare_command(command, platform="nt"))
@@ -162,14 +188,13 @@ class AdapterTests(unittest.TestCase):
 
     def test_local_model_preserves_utf8_stdin_and_stdout(self):
         problem = validate_dataset([problem_record()])[0]
-        output = LocalCommandModel().generate(problem, local_settings())
+        output = generate_text(problem.prompt, local_settings())
         self.assertEqual(problem.prompt, output)
 
     def test_local_judge_preserves_utf8_stdin_and_stdout(self):
-        problem = validate_dataset([problem_record()])[0]
         rendered = "한글 Judge 입력"
-        output = LocalCommandJudge().judge(
-            problem, "한글 답변", rendered, local_settings()
+        output = generate_text(
+            rendered, local_settings(), system_instruction=JUDGE_INSTRUCTION
         )
         self.assertEqual(rendered, output)
 
@@ -214,23 +239,104 @@ class AdapterTests(unittest.TestCase):
         with patch.dict(os.environ, {"KPR_TEST_API_KEY": "secret-test-key"}), patch(
             "urllib.request.urlopen", side_effect=fake_urlopen
         ):
-            response = call_openai_compatible(prompt="한글 문제", settings=settings)
+            text = generate_text("한글 문제", settings)
 
-        self.assertEqual("API 답변", extract_openai_text(response))
+        self.assertEqual("API 답변", text)
         self.assertEqual("https://example.test/v1/chat/completions", captured["url"])
         self.assertEqual("Bearer secret-test-key", captured["authorization"])
         self.assertEqual("example-model", captured["body"]["model"])
         self.assertEqual("한글 문제", captured["body"]["messages"][0]["content"])
 
+    def test_gemini_uses_the_same_call_for_judge_with_system_instruction(self):
+        settings = ProviderSettings("gemini", "example-model", api_key_env="TEST_KEY")
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                response = {"candidates": [{"content": {"parts": [
+                    {"text": "평가"}, {"text": " 결과"}
+                ]}}]}
+                return json.dumps(response).encode("utf-8")
+
+        def urlopen(request, timeout):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            captured["url"] = request.full_url
+            return FakeResponse()
+
+        with patch.dict(os.environ, {"TEST_KEY": "fake-key"}), patch(
+            "urllib.request.urlopen", side_effect=urlopen
+        ):
+            text = generate_text(
+                "문제와 답변", settings, system_instruction=JUDGE_INSTRUCTION
+            )
+        self.assertEqual("평가 결과", text)
+        self.assertTrue(captured["url"].endswith("example-model:generateContent"))
+        self.assertEqual(
+            "문제와 답변", captured["body"]["contents"][0]["parts"][0]["text"]
+        )
+        self.assertEqual(
+            JUDGE_INSTRUCTION,
+            captured["body"]["systemInstruction"]["parts"][0]["text"],
+        )
+
+    def test_empty_gemini_response_is_rejected(self):
+        for parts in ([], [{"text": ""}], [None]):
+            with self.subTest(parts=parts), self.assertRaises(RuntimeError):
+                extract_text({"candidates": [{"content": {"parts": parts}}]})
+
+    def test_api_errors_do_not_expose_sensitive_details(self):
+        settings = ProviderSettings("gemini", "example-model", api_key_env="TEST_KEY")
+        errors = [
+            urllib.error.HTTPError("https://example", 401, "sensitive", {}, None),
+            urllib.error.URLError("sensitive"),
+        ]
+        for error in errors:
+            with self.subTest(error=type(error).__name__), patch.dict(
+                os.environ, {"TEST_KEY": "fake-key"}
+            ), patch("urllib.request.urlopen", side_effect=error):
+                with self.assertRaises(RuntimeError) as raised:
+                    generate_text("질문", settings)
+                self.assertNotIn("sensitive", str(raised.exception))
+                self.assertNotIn("fake-key", str(raised.exception))
+
 
 class PipelineTests(unittest.TestCase):
+    def test_failures_are_counted_and_later_problems_continue(self):
+        problems = validate_dataset([problem_record("first"), problem_record("second")])
+        config = RunConfig(local_settings("test"), local_settings("judge"))
+        calls = []
+
+        def generate(prompt, settings, **kwargs):
+            calls.append(prompt)
+            if "first" in prompt or settings.model_id == "judge":
+                raise RuntimeError("예상된 실패")
+            return "답변"
+
+        output = io.StringIO()
+        failures = run_benchmark(problems, config, generate=generate, output=output)
+        self.assertEqual(2, failures)
+        self.assertEqual(3, len(calls))
+        self.assertIn("실패 2개", output.getvalue())
+
     def test_pipeline_prints_both_answers_without_result_files(self):
         problems = validate_dataset([problem_record()])
-        judge = StaticJudge()
         config = RunConfig(local_settings("test"), local_settings("judge"))
         output = io.StringIO()
+        calls = []
 
-        failures = run_benchmark(problems, config, StaticModel(), judge, output=output)
+        def generate(prompt, settings, **kwargs):
+            calls.append((prompt, settings, kwargs))
+            if settings.model_id == "test":
+                return "테스트 답변: problem-001"
+            return "Judge 답변: 적절합니다."
+
+        failures = run_benchmark(problems, config, generate=generate, output=output)
 
         printed = output.getvalue()
         self.assertIn("[테스트 모델 답변]", printed)
@@ -238,7 +344,9 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("[Judge 모델 답변]", printed)
         self.assertIn("Judge 답변:", printed)
         self.assertEqual(0, failures)
-        self.assertEqual("테스트 답변: problem-001", judge.received_response)
+        self.assertEqual(problems[0].prompt, calls[0][0])
+        self.assertIn("테스트 답변: problem-001", calls[1][0])
+        self.assertEqual(JUDGE_INSTRUCTION, calls[1][2]["system_instruction"])
 
     def test_configure_then_run_uses_console_only(self):
         with tempfile.TemporaryDirectory() as directory:
