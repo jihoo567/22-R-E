@@ -88,7 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser(
         "run", help="문제 → 테스트 모델 → Judge 실행 후 콘솔 출력"
     )
-    run.add_argument("input", type=Path, help="문제 JSONL 경로")
+    run.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        help="문제 JSONL 경로(생략하면 설정의 input_path 사용)",
+    )
     run.add_argument("--limit", type=int, help="앞에서부터 실행할 문제 수")
     _add_settings_argument(run)
     return parser
@@ -97,7 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> None:
     config = load_config(args.settings)
     _validate_runtime(config)
-    problems = load_and_validate_dataset(args.input, limit=args.limit)
+    input_path = args.input
+    if input_path is None:
+        if config.input_path is None:
+            raise ValueError(
+                "문제 JSONL 경로가 없습니다. run 뒤에 경로를 입력하거나 "
+                "kpr-config.json의 input_path를 설정하세요."
+            )
+        input_path = Path(config.input_path).expanduser()
+        if not input_path.is_absolute():
+            input_path = args.settings.parent / input_path
+    problems = load_and_validate_dataset(input_path, limit=args.limit)
 
     print(
         f"테스트 모델: {config.test_model.provider} / {config.test_model.model_id}"

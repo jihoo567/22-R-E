@@ -1,5 +1,4 @@
 {"id":"problem-001","prompt":"대한민국의 수도를 한 문장으로 답하세요.","metadata":{"category":"knowledge"}}
 {"id":"problem-002","prompt":"다음 문장을 자연스럽게 고쳐 쓰세요: 저는 어제 도서관에 갈 것입니다.","metadata":{"category":"grammar"}}
 {"id":"problem-003","prompt":"물의 화학식을 답하고 간단히 설명하세요.","metadata":{"category":"science"}}
-{"id":"problem-004","prompt":"학교에서 지켜야 할 예절을 세 가지 제시하세요.","metadata":{"category":"instruction"}}
-{"id":"problem-005","prompt":"인공지능의 장점과 한계를 각각 한 가지씩 설명하세요.","metadata":{"category":"reasoning"}}
+{"id":"problem-004","prompt":"log의 밑변환 공식을 설명하라(30자 이내)","metadata":{"category":"reasoning"}}

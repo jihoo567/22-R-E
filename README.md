@@ -83,6 +83,7 @@ Judge 모두 `qwen2.5:14b`를 사용하는 다음 구조입니다.
 
 ```json
 {
+  "input_path": "data/examples/problems.jsonl",
   "test_model": {
     "provider": "local",
     "model_id": "qwen2.5:14b",
@@ -114,6 +115,10 @@ Judge 모두 `qwen2.5:14b`를 사용하는 다음 구조입니다.
 실행에서는 `kpr-config.json`을 읽습니다. 모든 변수 설명과
 Local·Gemini·OpenAI 호환 API 예시는 [CONFIG_GUIDE.md](CONFIG_GUIDE.md)에
 있습니다. 같은 문서 경로는 `./kpr --help` 또는 `kpr.bat --help`에도 표시됩니다.
+
+`input_path`에는 평소 실행할 문제 JSONL 경로를 저장합니다. 상대 경로는
+`kpr-config.json`이 있는 폴더를 기준으로 합니다. 이 값을 설정하면 `run` 뒤에
+문제 파일 경로를 반복해서 작성하지 않아도 됩니다.
 
 각 모델의 `system_instruction`을 수정하면 테스트 모델 지시문과 Judge 지시문을
 서로 독립적으로 설정할 수 있습니다. 지시문을 사용하지 않으려면 `null`로
@@ -202,18 +207,23 @@ macOS/Linux:
 
 ```bash
 ./kpr validate data/examples/problems.jsonl
-./kpr run data/examples/problems.jsonl --limit 1
+./kpr run --limit 1
 ```
 
 Windows PowerShell:
 
 ```powershell
 .\kpr.bat validate data\examples\problems.jsonl
-.\kpr.bat run data\examples\problems.jsonl --limit 1
+.\kpr.bat run --limit 1
 ```
 
 `--limit 1`을 빼면 파일의 모든 문제를 실행합니다. 문제와 모델 응답, Judge
 응답은 콘솔에만 표시되며 별도 결과 파일을 만들지 않습니다.
+명령행에 문제 경로를 직접 쓰면 설정의 `input_path`보다 우선합니다.
+
+```bash
+./kpr run data/examples/other-problems.jsonl --limit 1
+```
 
 ## 명령 목록
 

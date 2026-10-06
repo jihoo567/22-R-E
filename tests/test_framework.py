@@ -152,11 +152,7 @@ class SchemaAndConfigTests(unittest.TestCase):
         self.assertEqual("local", config.test_model.provider)
         self.assertEqual("qwen2.5:14b", config.test_model.model_id)
         self.assertEqual("local", config.judge_model.provider)
-        self.assertIsNone(config.test_model.system_instruction)
-        self.assertEqual(
-            "당신은 테스트 모델의 답변을 검토하는 독립 평가자입니다.",
-            config.judge_model.system_instruction,
-        )
+        self.assertEqual("data/examples/problems.jsonl", config.input_path)
         self.assertFalse(any(key.startswith("_") for key in raw))
         self.assertNotIn("api_examples", raw)
 
@@ -192,6 +188,24 @@ class SchemaAndConfigTests(unittest.TestCase):
                     "system_instruction": "   ",
                 },
                 "test_model",
+            )
+
+    def test_blank_input_path_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "input_path"):
+            RunConfig.from_dict(
+                {
+                    "input_path": "   ",
+                    "test_model": {
+                        "provider": "local",
+                        "model_id": "test",
+                        "command": stdin_echo_command(),
+                    },
+                    "judge_model": {
+                        "provider": "local",
+                        "model_id": "judge",
+                        "command": stdin_echo_command(),
+                    },
+                }
             )
 
     def test_help_points_to_markdown_config_guide(self):
@@ -385,7 +399,7 @@ class AdapterTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
-    def test_directly_edited_visible_config_can_run(self):
+    def test_run_uses_input_path_from_config(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             settings_path = base / "kpr-config.json"
@@ -396,7 +410,48 @@ class PipelineTests(unittest.TestCase):
             )
             write_config(
                 settings_path,
+                RunConfig(
+                    local_settings("test"),
+                    local_settings("judge"),
+                    input_path="problems.jsonl",
+                ),
+            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                main(["run", "--settings", str(settings_path)])
+
+        self.assertIn("[테스트 모델 답변]", stdout.getvalue())
+        self.assertIn("[Judge 모델 답변]", stdout.getvalue())
+
+    def test_run_requires_command_or_config_input_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "kpr-config.json"
+            write_config(
+                settings_path,
                 RunConfig(local_settings("test"), local_settings("judge")),
+            )
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                main(["run", "--settings", str(settings_path)])
+
+        self.assertIn("input_path", stderr.getvalue())
+
+    def test_command_input_overrides_config_input_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            settings_path = base / "kpr-config.json"
+            input_path = base / "problems.jsonl"
+            input_path.write_text(
+                json.dumps(problem_record(), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            write_config(
+                settings_path,
+                RunConfig(
+                    local_settings("test"),
+                    local_settings("judge"),
+                    input_path="missing.jsonl",
+                ),
             )
             stdout = io.StringIO()
             with redirect_stdout(stdout):

@@ -6,12 +6,14 @@ KPR은 프로젝트 루트의 `kpr-config.json`을 읽습니다. 처음 실행�
 
 - `test_model`: 문제에 답하는 모델
 - `judge_model`: 문제와 테스트 모델 답변을 검토하는 모델
+- `input_path`: `run`에서 사용할 문제 JSONL 경로
 - `.env`: API 키 저장 파일. 실제 키를 JSON에 직접 쓰지 않습니다.
 
 ## 변수 설명
 
 | 변수 | 설명 |
 | --- | --- |
+| `input_path` | 문제 JSONL 경로입니다. 상대 경로는 `kpr-config.json`이 있는 폴더를 기준으로 합니다. 명령행에 경로를 쓰면 명령행 값이 우선합니다. |
 | `provider` | `local`, `gemini`, `openai-compatible` 중 하나입니다. |
 | `model_id` | 호출할 모델 이름입니다. 로컬에서는 `command`의 모델 이름과 맞춥니다. |
 | `command` | 로컬 모델 실행 명령입니다. API 모델에서는 `null`입니다. |
@@ -39,6 +41,7 @@ system_instruction
 
 ```json
 {
+  "input_path": "data/examples/problems.jsonl",
   "test_model": {
     "provider": "local",
     "model_id": "qwen2.5:14b",
@@ -70,6 +73,7 @@ system_instruction
 
 ```json
 {
+  "input_path": "data/examples/problems.jsonl",
   "test_model": {
     "provider": "local",
     "model_id": "llama3.2:1b",
@@ -142,12 +146,18 @@ macOS/Linux:
 
 ```bash
 ./kpr show-config
-./kpr run data/examples/problems.jsonl --limit 1
+./kpr run --limit 1
 ```
 
 Windows:
 
 ```bat
 kpr.bat show-config
-kpr.bat run data\examples\problems.jsonl --limit 1
+kpr.bat run --limit 1
+```
+
+설정과 다른 파일을 한 번만 실행하려면 경로를 직접 입력합니다.
+
+```bash
+./kpr run data/examples/other-problems.jsonl --limit 1
 ```

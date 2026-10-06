@@ -99,11 +99,17 @@ class ProviderSettings:
 class RunConfig:
     test_model: ProviderSettings
     judge_model: ProviderSettings
+    input_path: str | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "RunConfig":
         if not isinstance(value, dict):
             raise ValueError("설정 최상위 값은 객체여야 합니다.")
+        input_path = value.get("input_path")
+        if input_path is not None and (
+            not isinstance(input_path, str) or not input_path.strip()
+        ):
+            raise ValueError("input_path는 내용이 있는 문자열 또는 null이어야 합니다.")
         return cls(
             test_model=ProviderSettings.from_dict(
                 value.get("test_model", {}), "test_model"
@@ -111,10 +117,12 @@ class RunConfig:
             judge_model=ProviderSettings.from_dict(
                 value.get("judge_model", {}), "judge_model"
             ),
+            input_path=input_path.strip() if isinstance(input_path, str) else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "input_path": self.input_path,
             "test_model": self.test_model.public_dict(),
             "judge_model": self.judge_model.public_dict(),
         }

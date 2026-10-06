@@ -67,12 +67,13 @@ notepad kpr-config.json
 
 기본 파일은 테스트와 Judge 모두 `qwen2.5:14b`를 사용합니다. 다른 모델을
 사용하려면 각 모델의 `model_id`와 `command`를 직접 수정한 뒤 실행합니다.
+최상위 `input_path`에는 평소 사용할 문제 JSONL 경로를 작성합니다.
 모든 설정 변수와 Local·Gemini·OpenAI 호환 API 예시는
 [CONFIG_GUIDE.md](CONFIG_GUIDE.md)에 있습니다. 문서 경로는
 `kpr.bat --help`에서도 확인할 수 있습니다.
 
 ```powershell
-.\kpr.bat run data\examples\problems.jsonl --limit 1
+.\kpr.bat run --limit 1
 ```
 
 ## 5. Gemini Judge 사용
@@ -109,7 +110,7 @@ KPR_JUDGE_API_KEY=실제_Gemini_API_키
 저장한 뒤 실행합니다.
 
 ```powershell
-.\kpr.bat run data\examples\problems.jsonl --limit 1
+.\kpr.bat run --limit 1
 ```
 
 ## 6. 문제 파일 확인
