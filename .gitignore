@@ -1,6 +1,6 @@
 .env
 .env.local
-.kpr/
+kpr-config.json
 .venv/
 results/
 build/

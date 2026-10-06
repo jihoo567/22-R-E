@@ -24,6 +24,7 @@ class ProviderSettings:
     command: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
+    system_instruction: str | None = None
     temperature: float = 0.0
     seed: int | None = None
     max_tokens: int = 1024
@@ -58,6 +59,14 @@ class ProviderSettings:
             not isinstance(api_key_env, str) or not api_key_env.strip()
         ):
             raise ValueError(f"API 방식의 {field_name}에는 api_key_env가 필요합니다.")
+        system_instruction = value.get("system_instruction")
+        if system_instruction is not None and (
+            not isinstance(system_instruction, str)
+            or not system_instruction.strip()
+        ):
+            raise ValueError(
+                f"{field_name}.system_instruction은 내용이 있는 문자열 또는 null이어야 합니다."
+            )
 
         settings = cls(
             provider=provider,
@@ -65,6 +74,7 @@ class ProviderSettings:
             command=command.strip() if isinstance(command, str) else None,
             base_url=base_url.rstrip("/") if isinstance(base_url, str) else None,
             api_key_env=api_key_env.strip() if isinstance(api_key_env, str) else None,
+            system_instruction=system_instruction,
             temperature=float(value.get("temperature", 0.0)),
             seed=value.get("seed"),
             max_tokens=int(value.get("max_tokens", 1024)),
@@ -110,47 +120,14 @@ class RunConfig:
         }
 
 
-def save_config(path: Path, config: RunConfig) -> None:
-    """사전 설정을 UTF-8 JSON으로 저장합니다."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
 def load_config(path: Path) -> RunConfig:
     if not path.exists():
         raise ValueError(
-            "사전 설정이 없습니다. 먼저 'kpr configure' 명령을 실행하세요."
+            "설정이 없습니다. kpr-config.example.json을 "
+            "kpr-config.json으로 복사해 직접 수정하세요."
         )
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ValueError(f"설정 파일의 JSON 형식이 잘못되었습니다: {path}") from error
     return RunConfig.from_dict(value)
-
-
-def make_provider_settings(
-    provider: str,
-    model_id: str,
-    command: str | None,
-    *,
-    base_url: str | None,
-    api_key_env: str | None,
-    timeout_seconds: float,
-) -> ProviderSettings:
-    """configure 명령의 인자로 모델 설정을 만듭니다."""
-    if provider == "local" and not command:
-        command = f"ollama run {model_id}"
-    return ProviderSettings.from_dict(
-        {
-            "provider": provider,
-            "model_id": model_id,
-            "command": command,
-            "base_url": base_url,
-            "api_key_env": api_key_env,
-            "timeout_seconds": timeout_seconds,
-        },
-        "model",
-    )

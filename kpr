@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+KPR_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if command -v python3 >/dev/null 2>&1; then
+    KPR_PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+    KPR_PYTHON=python
+else
+    echo "[kpr] Python 3.10 이상을 찾을 수 없습니다." >&2
+    echo "[kpr] Python을 설치한 뒤 다시 실행하세요." >&2
+    exit 1
+fi
+
+exec "$KPR_PYTHON" "$KPR_ROOT/kpr.py" "$@"

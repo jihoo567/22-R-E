@@ -11,9 +11,6 @@ from .dataset import Problem
 from .providers import generate_text
 
 
-JUDGE_INSTRUCTION = "당신은 테스트 모델의 답변을 검토하는 독립 평가자입니다."
-
-
 def build_judge_prompt(problem: Problem, response: str) -> str:
     return f"""다음 문제와 테스트 모델의 답변을 검토하고 평가 결과를 작성하세요.
 별도의 채점 기준이나 점수 형식은 제공되지 않습니다.
@@ -47,7 +44,11 @@ def run_benchmark(
         print(problem.prompt, file=stream, flush=True)
 
         try:
-            test_response = generate(problem.prompt, config.test_model)
+            test_response = generate(
+                problem.prompt,
+                config.test_model,
+                system_instruction=config.test_model.system_instruction,
+            )
         except Exception as error:
             print("\n[테스트 모델 답변]", file=stream)
             print(f"생성 실패: {type(error).__name__}: {error}", file=stream, flush=True)
@@ -63,7 +64,7 @@ def run_benchmark(
             judge_response = generate(
                 rendered_prompt,
                 config.judge_model,
-                system_instruction=JUDGE_INSTRUCTION,
+                system_instruction=config.judge_model.system_instruction,
             )
         except Exception as error:
             failures += 1

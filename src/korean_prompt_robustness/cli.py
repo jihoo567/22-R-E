@@ -9,24 +9,15 @@ import shutil
 from pathlib import Path
 
 from .auth import FALLBACK_KEY_ENVS, find_api_key
-from .config import (
-    ProviderSettings,
-    RunConfig,
-    load_config,
-    make_provider_settings,
-    save_config,
-)
+from .config import RunConfig, load_config
 from .dataset import load_and_validate_dataset
 from .local_process import command_executable
 from .pipeline import run_benchmark
 
 
-# 모든 안내와 Windows 래퍼는 프로젝트 루트에서 CLI를 실행합니다.
-# 설치 위치가 아닌 실행 위치를 기준으로 .env와 .kpr을 찾습니다.
-DEFAULT_SETTINGS_PATH = Path(".kpr") / "config.json"
-DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
-DEFAULT_LOCAL_MODEL = "qwen2.5:14b"
-PROVIDER_CHOICES = ("local", "gemini", "openai-compatible")
+# 모든 런처는 프로젝트 루트에서 CLI를 실행합니다. 사용자가 일반 편집기로
+# 바로 수정할 수 있도록 설정 파일을 숨김 폴더 밖에 둡니다.
+DEFAULT_SETTINGS_PATH = Path("kpr-config.json")
 
 
 def _load_env_file(path: Path) -> None:
@@ -41,16 +32,6 @@ def _load_env_file(path: Path) -> None:
         key = key.strip()
         if key and key not in os.environ:
             os.environ[key] = value.strip().strip('"').strip("'")
-
-
-def _model_id(provider: str, requested: str | None, role: str) -> str:
-    if requested:
-        return requested
-    if provider == "gemini":
-        return DEFAULT_GEMINI_MODEL
-    if provider == "local":
-        return DEFAULT_LOCAL_MODEL
-    raise ValueError(f"{role}에 openai-compatible을 선택하면 모델 ID가 필요합니다.")
 
 
 def _validate_runtime(config: RunConfig) -> None:
@@ -94,27 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kpr",
         description="사전 설정한 테스트 모델과 Judge 모델을 콘솔에서 실행합니다.",
+        epilog="설정 파일: kpr-config.json | 설정 설명: CONFIG_GUIDE.md",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    configure = subparsers.add_parser(
-        "configure", help="테스트 모델과 Judge 모델을 먼저 설정"
-    )
-    for role, label in (("test", "테스트"), ("judge", "Judge")):
-        configure.add_argument(
-            f"--{role}",
-            choices=PROVIDER_CHOICES,
-            required=True,
-            help=f"{label} 모델 방식",
-        )
-        configure.add_argument(f"--{role}-model", help=f"{label} 모델 ID")
-        configure.add_argument(
-            f"--{role}-command", help=f"{label} 로컬 명령(기본값: ollama run <모델 ID>)"
-        )
-        configure.add_argument(
-            f"--{role}-base-url", help=f"{label} OpenAI 호환 API의 base URL"
-        )
-    _add_settings_argument(configure)
 
     show = subparsers.add_parser("show-config", help="현재 사전 설정 표시")
     _add_settings_argument(show)
@@ -129,29 +92,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--limit", type=int, help="앞에서부터 실행할 문제 수")
     _add_settings_argument(run)
     return parser
-
-
-def _settings_for_role(args: argparse.Namespace, role: str) -> ProviderSettings:
-    provider = getattr(args, role)
-    model_id = _model_id(provider, getattr(args, f"{role}_model"), role)
-    return make_provider_settings(
-        provider,
-        model_id,
-        getattr(args, f"{role}_command"),
-        base_url=getattr(args, f"{role}_base_url"),
-        api_key_env=f"KPR_{role.upper()}_API_KEY" if provider != "local" else None,
-        timeout_seconds=300.0 if provider == "local" else 120.0,
-    )
-
-
-def _configure(args: argparse.Namespace) -> None:
-    config = RunConfig(_settings_for_role(args, "test"), _settings_for_role(args, "judge"))
-    save_config(args.settings, config)
-    print(f"사전 설정 완료: {args.settings}")
-    for label, settings in (("테스트", config.test_model), ("Judge", config.judge_model)):
-        print(f"{label} 모델: {settings.provider} / {settings.model_id}")
-        if settings.api_key_env:
-            print(f"{label} API 키: .env의 {settings.api_key_env}")
 
 
 def _run(args: argparse.Namespace) -> None:
@@ -176,9 +116,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         _load_env_file(Path(".env"))
-        if args.command == "configure":
-            _configure(args)
-        elif args.command == "show-config":
+        if args.command == "show-config":
             config = load_config(args.settings)
             print(json.dumps(config.to_dict(), ensure_ascii=False, indent=2))
         elif args.command == "validate":

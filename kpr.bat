@@ -5,10 +5,19 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
 
-if not exist ".venv\Scripts\python.exe" (
-    echo The virtual environment was not found. Run install_windows.bat first.
+where py >nul 2>nul
+if %errorlevel%==0 goto :run_py_launcher
+
+where python >nul 2>nul
+if errorlevel 1 (
+    echo [kpr] Python 3.10 or newer was not found.
+    echo [kpr] Install Python and run this command again.
     exit /b 1
 )
 
-".venv\Scripts\python.exe" -m korean_prompt_robustness %*
+python "%~dp0kpr.py" %*
+exit /b %errorlevel%
+
+:run_py_launcher
+py -3 "%~dp0kpr.py" %*
 exit /b %errorlevel%

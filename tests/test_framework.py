@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import os
@@ -16,18 +17,21 @@ from korean_prompt_robustness.config import (
     ProviderSettings,
     RunConfig,
     load_config,
-    make_provider_settings,
-    save_config,
 )
 from korean_prompt_robustness.local_process import command_executable, prepare_command
 from korean_prompt_robustness.providers import generate_text
 from korean_prompt_robustness.providers.gemini import extract_text
-from korean_prompt_robustness.pipeline import (
-    JUDGE_INSTRUCTION,
-    build_judge_prompt,
-    run_benchmark,
-)
+from korean_prompt_robustness.pipeline import build_judge_prompt, run_benchmark
 from korean_prompt_robustness.dataset import load_and_validate_dataset, validate_dataset
+
+
+def load_bootstrap_module():
+    path = Path(__file__).resolve().parents[1] / "kpr.py"
+    spec = importlib.util.spec_from_file_location("kpr_bootstrap", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def problem_record(problem_id: str = "problem-001") -> dict:
@@ -42,18 +46,29 @@ def stdin_echo_command() -> str:
     return f'"{sys.executable}" -c "import sys;sys.stdout.write(sys.stdin.read())"'
 
 
-def local_settings(model_id: str = "local-test") -> ProviderSettings:
+def local_settings(
+    model_id: str = "local-test",
+    system_instruction: str | None = None,
+) -> ProviderSettings:
     return ProviderSettings(
         provider="local",
         model_id=model_id,
         command=stdin_echo_command(),
+        system_instruction=system_instruction,
+    )
+
+
+def write_config(path: Path, config: RunConfig) -> None:
+    path.write_text(
+        json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
 class SchemaAndConfigTests(unittest.TestCase):
     def test_default_settings_are_stored_in_the_working_project(self):
         self.assertEqual(
-            Path.cwd() / ".kpr" / "config.json", DEFAULT_SETTINGS_PATH.resolve()
+            Path.cwd() / "kpr-config.json", DEFAULT_SETTINGS_PATH.resolve()
         )
 
     def test_minimal_problem_schema(self):
@@ -91,38 +106,37 @@ class SchemaAndConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ):
             base = Path(directory)
             (base / ".env").write_text("KPR_PATH_TEST=loaded\n", encoding="utf-8")
+            write_config(
+                base / "kpr-config.json",
+                RunConfig(local_settings("test"), local_settings("judge")),
+            )
             os.environ.pop("KPR_PATH_TEST", None)
             try:
                 os.chdir(base)
                 with redirect_stdout(io.StringIO()):
-                    main(["configure", "--test", "local", "--judge", "local"])
-                self.assertTrue((base / ".kpr" / "config.json").exists())
+                    main(["show-config"])
                 self.assertEqual("loaded", os.environ["KPR_PATH_TEST"])
             finally:
                 os.chdir(original)
 
-    def test_configure_supports_gemini_and_local_separately(self):
+    def test_config_file_supports_gemini_and_local_separately(self):
         config = RunConfig(
-            test_model=make_provider_settings(
-                "local",
-                "qwen2.5:14b",
-                None,
-                base_url=None,
-                api_key_env=None,
+            test_model=ProviderSettings(
+                provider="local",
+                model_id="qwen2.5:14b",
+                command="ollama run qwen2.5:14b",
                 timeout_seconds=600,
             ),
-            judge_model=make_provider_settings(
-                "gemini",
-                "gemini-3.6-flash",
-                None,
-                base_url=None,
+            judge_model=ProviderSettings(
+                provider="gemini",
+                model_id="gemini-3.6-flash",
                 api_key_env="KPR_JUDGE_API_KEY",
                 timeout_seconds=120,
             ),
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
-            save_config(path, config)
+            write_config(path, config)
             loaded = load_config(path)
 
         self.assertEqual("local", loaded.test_model.provider)
@@ -131,27 +145,87 @@ class SchemaAndConfigTests(unittest.TestCase):
         self.assertEqual("gemini-3.6-flash", loaded.judge_model.model_id)
         self.assertIsNone(loaded.judge_model.command)
 
+    def test_example_config_is_valid(self):
+        path = Path(__file__).resolve().parents[1] / "kpr-config.example.json"
+        config = load_config(path)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual("local", config.test_model.provider)
+        self.assertEqual("qwen2.5:14b", config.test_model.model_id)
+        self.assertEqual("local", config.judge_model.provider)
+        self.assertIsNone(config.test_model.system_instruction)
+        self.assertEqual(
+            "당신은 테스트 모델의 답변을 검토하는 독립 평가자입니다.",
+            config.judge_model.system_instruction,
+        )
+        self.assertFalse(any(key.startswith("_") for key in raw))
+        self.assertNotIn("api_examples", raw)
+
+    def test_config_stores_test_and_judge_system_instructions(self):
+        config = RunConfig.from_dict(
+            {
+                "test_model": {
+                    "provider": "local",
+                    "model_id": "test",
+                    "command": stdin_echo_command(),
+                    "system_instruction": "테스트 모델 지시문",
+                },
+                "judge_model": {
+                    "provider": "local",
+                    "model_id": "judge",
+                    "command": stdin_echo_command(),
+                    "system_instruction": "Judge 지시문",
+                },
+            }
+        )
+        self.assertEqual(
+            "테스트 모델 지시문", config.test_model.system_instruction
+        )
+        self.assertEqual("Judge 지시문", config.judge_model.system_instruction)
+
+    def test_blank_system_instruction_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "system_instruction"):
+            ProviderSettings.from_dict(
+                {
+                    "provider": "local",
+                    "model_id": "test",
+                    "command": stdin_echo_command(),
+                    "system_instruction": "   ",
+                },
+                "test_model",
+            )
+
+    def test_help_points_to_markdown_config_guide(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), self.assertRaises(SystemExit) as exit_context:
+            main(["--help"])
+        self.assertEqual(0, exit_context.exception.code)
+        self.assertIn("CONFIG_GUIDE.md", stdout.getvalue())
+
     def test_openai_compatible_requires_model_base_url_and_key_name(self):
-        settings = make_provider_settings(
-            "openai-compatible",
-            "example-model",
-            None,
-            base_url="https://example.test/v1/",
-            api_key_env="KPR_TEST_API_KEY",
-            timeout_seconds=120,
+        settings = ProviderSettings.from_dict(
+            {
+                "provider": "openai-compatible",
+                "model_id": "example-model",
+                "base_url": "https://example.test/v1/",
+                "api_key_env": "KPR_TEST_API_KEY",
+                "timeout_seconds": 120,
+            },
+            "test_model",
         )
         self.assertEqual("https://example.test/v1", settings.base_url)
         with self.assertRaisesRegex(ValueError, "base_url"):
-            make_provider_settings(
-                "openai-compatible",
-                "example-model",
-                None,
-                base_url=None,
-                api_key_env="KPR_TEST_API_KEY",
-                timeout_seconds=120,
+            ProviderSettings.from_dict(
+                {
+                    "provider": "openai-compatible",
+                    "model_id": "example-model",
+                    "base_url": None,
+                    "api_key_env": "KPR_TEST_API_KEY",
+                    "timeout_seconds": 120,
+                },
+                "test_model",
             )
 
-    def test_run_refuses_to_start_before_configuration(self):
+    def test_run_refuses_to_start_without_config_file(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             input_path = base / "problems.jsonl"
@@ -170,7 +244,7 @@ class SchemaAndConfigTests(unittest.TestCase):
                     ]
                 )
 
-        self.assertIn("먼저 'kpr configure'", stderr.getvalue())
+        self.assertIn("kpr-config.json", stderr.getvalue())
 
 
 class AdapterTests(unittest.TestCase):
@@ -194,9 +268,10 @@ class AdapterTests(unittest.TestCase):
     def test_local_judge_preserves_utf8_stdin_and_stdout(self):
         rendered = "한글 Judge 입력"
         output = generate_text(
-            rendered, local_settings(), system_instruction=JUDGE_INSTRUCTION
+            rendered,
+            local_settings(system_instruction="로컬 Judge 지시문"),
         )
-        self.assertEqual(rendered, output)
+        self.assertEqual(f"로컬 Judge 지시문\n\n{rendered}", output)
 
     def test_judge_prompt_contains_problem_and_test_response(self):
         problem = validate_dataset([problem_record()])[0]
@@ -248,7 +323,12 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual("한글 문제", captured["body"]["messages"][0]["content"])
 
     def test_gemini_uses_the_same_call_for_judge_with_system_instruction(self):
-        settings = ProviderSettings("gemini", "example-model", api_key_env="TEST_KEY")
+        settings = ProviderSettings(
+            "gemini",
+            "example-model",
+            api_key_env="TEST_KEY",
+            system_instruction="설정에서 읽은 Judge 지시문",
+        )
         captured = {}
 
         class FakeResponse:
@@ -272,16 +352,14 @@ class AdapterTests(unittest.TestCase):
         with patch.dict(os.environ, {"TEST_KEY": "fake-key"}), patch(
             "urllib.request.urlopen", side_effect=urlopen
         ):
-            text = generate_text(
-                "문제와 답변", settings, system_instruction=JUDGE_INSTRUCTION
-            )
+            text = generate_text("문제와 답변", settings)
         self.assertEqual("평가 결과", text)
         self.assertTrue(captured["url"].endswith("example-model:generateContent"))
         self.assertEqual(
             "문제와 답변", captured["body"]["contents"][0]["parts"][0]["text"]
         )
         self.assertEqual(
-            JUDGE_INSTRUCTION,
+            "설정에서 읽은 Judge 지시문",
             captured["body"]["systemInstruction"]["parts"][0]["text"],
         )
 
@@ -307,6 +385,26 @@ class AdapterTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_directly_edited_visible_config_can_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            settings_path = base / "kpr-config.json"
+            input_path = base / "problems.jsonl"
+            input_path.write_text(
+                json.dumps(problem_record(), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            write_config(
+                settings_path,
+                RunConfig(local_settings("test"), local_settings("judge")),
+            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                main(["run", str(input_path), "--settings", str(settings_path)])
+
+        self.assertIn("[테스트 모델 답변]", stdout.getvalue())
+        self.assertIn("[Judge 모델 답변]", stdout.getvalue())
+
     def test_failures_are_counted_and_later_problems_continue(self):
         problems = validate_dataset([problem_record("first"), problem_record("second")])
         config = RunConfig(local_settings("test"), local_settings("judge"))
@@ -326,7 +424,10 @@ class PipelineTests(unittest.TestCase):
 
     def test_pipeline_prints_both_answers_without_result_files(self):
         problems = validate_dataset([problem_record()])
-        config = RunConfig(local_settings("test"), local_settings("judge"))
+        config = RunConfig(
+            local_settings("test", "테스트 모델 지시문"),
+            local_settings("judge", "Judge 모델 지시문"),
+        )
         output = io.StringIO()
         calls = []
 
@@ -345,47 +446,13 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("Judge 답변:", printed)
         self.assertEqual(0, failures)
         self.assertEqual(problems[0].prompt, calls[0][0])
+        self.assertEqual(
+            "테스트 모델 지시문", calls[0][2]["system_instruction"]
+        )
         self.assertIn("테스트 답변: problem-001", calls[1][0])
-        self.assertEqual(JUDGE_INSTRUCTION, calls[1][2]["system_instruction"])
-
-    def test_configure_then_run_uses_console_only(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            settings_path = base / "config.json"
-            input_path = base / "problems.jsonl"
-            input_path.write_text(
-                json.dumps(problem_record(), ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-            command = stdin_echo_command()
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                main(
-                    [
-                        "configure",
-                        "--test",
-                        "local",
-                        "--judge",
-                        "local",
-                        "--test-model",
-                        "echo-test",
-                        "--judge-model",
-                        "echo-judge",
-                        "--test-command",
-                        command,
-                        "--judge-command",
-                        command,
-                        "--settings",
-                        str(settings_path),
-                    ]
-                )
-                main(["run", str(input_path), "--settings", str(settings_path)])
-
-            created_files = sorted(path.name for path in base.iterdir())
-
-        self.assertEqual(["config.json", "problems.jsonl"], created_files)
-        self.assertIn("[테스트 모델 답변]", stdout.getvalue())
-        self.assertIn("[Judge 모델 답변]", stdout.getvalue())
+        self.assertEqual(
+            "Judge 모델 지시문", calls[1][2]["system_instruction"]
+        )
 
     def test_cli_exits_with_error_when_a_model_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -397,20 +464,17 @@ class PipelineTests(unittest.TestCase):
                 encoding="utf-8",
             )
             failing_command = f'"{sys.executable}" -c "raise SystemExit(1)"'
-            with redirect_stdout(io.StringIO()):
-                main(
-                    [
-                        "configure",
-                        "--test",
-                        "local",
-                        "--judge",
-                        "local",
-                        "--test-command",
-                        failing_command,
-                        "--settings",
-                        str(settings_path),
-                    ]
-                )
+            write_config(
+                settings_path,
+                RunConfig(
+                    ProviderSettings(
+                        provider="local",
+                        model_id="failing-test",
+                        command=failing_command,
+                    ),
+                    local_settings("judge"),
+                ),
+            )
             stdout = io.StringIO()
             stderr = io.StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr), self.assertRaises(
@@ -423,6 +487,35 @@ class PipelineTests(unittest.TestCase):
             "1개 문제에서 모델 실행 또는 평가가 실패했습니다",
             stderr.getvalue(),
         )
+
+
+class BootstrapTests(unittest.TestCase):
+    def test_venv_python_is_platform_specific(self):
+        bootstrap = load_bootstrap_module()
+        root = Path("project")
+        self.assertEqual(
+            root / ".venv" / "Scripts" / "python.exe",
+            bootstrap.venv_python(root, platform="nt"),
+        )
+        self.assertEqual(
+            root / ".venv" / "bin" / "python",
+            bootstrap.venv_python(root, platform="posix"),
+        )
+
+    def test_project_fingerprint_changes_with_source(self):
+        bootstrap = load_bootstrap_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "example"
+            source.mkdir(parents=True)
+            (root / "pyproject.toml").write_text("version = '1'\n", encoding="utf-8")
+            module = source / "module.py"
+            module.write_text("VALUE = 1\n", encoding="utf-8")
+            first = bootstrap.project_fingerprint(root)
+            module.write_text("VALUE = 2\n", encoding="utf-8")
+            second = bootstrap.project_fingerprint(root)
+
+        self.assertNotEqual(first, second)
 
 
 if __name__ == "__main__":
