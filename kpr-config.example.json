@@ -1,5 +1,6 @@
 {
   "input_path": "data/examples/problems.jsonl",
+  "output_dir": "results",
   "test_model": {
     "provider": "local",
     "model_id": "qwen2.5:14b",

@@ -1,15 +1,17 @@
 # Korean Prompt Robustness
 
 준비된 JSONL 문제를 테스트 모델에 보내고, 그 답변을 Judge 모델에 전달한 뒤
-두 응답을 콘솔에 출력하는 최소 Python 벤치마크입니다. 현재 버전은 `0.6.0`입니다.
+두 응답을 콘솔에 출력하는 최소 Python 벤치마크입니다. 문제와 테스트 모델
+답변은 실행별 JSONL 파일에도 저장합니다. 현재 버전은 `0.6.0`입니다.
 
 ```text
-문제 JSONL → 테스트 모델 → 테스트 답변 → Judge 모델 → Judge 답변 → 콘솔
+answer: 문제 JSONL → 테스트 모델 → 테스트 답변 파일
+test:   가장 최근 답변 파일 → Judge 모델 → 콘솔
 ```
 
-문제 생성, 점수 계산, 결과 파일 저장, 그래프와 보고서 기능은 포함하지
-않습니다. 테스트 모델과 Judge 모델은 로컬 Ollama, Gemini API,
-OpenAI 호환 API 중에서 각각 독립적으로 선택할 수 있습니다.
+문제 생성, 점수 계산, 그래프와 보고서 기능은 포함하지 않습니다. 테스트 모델과
+Judge 모델은 로컬 Ollama, Gemini API, OpenAI 호환 API 중에서 각각 독립적으로
+선택할 수 있습니다.
 
 ## 가장 빠른 시작
 
@@ -84,6 +86,7 @@ Judge 모두 `qwen2.5:14b`를 사용하는 다음 구조입니다.
 ```json
 {
   "input_path": "data/examples/problems.jsonl",
+  "output_dir": "results",
   "test_model": {
     "provider": "local",
     "model_id": "qwen2.5:14b",
@@ -117,8 +120,11 @@ Local·Gemini·OpenAI 호환 API 예시는 [CONFIG_GUIDE.md](CONFIG_GUIDE.md)에
 있습니다. 같은 문서 경로는 `./kpr --help` 또는 `kpr.bat --help`에도 표시됩니다.
 
 `input_path`에는 평소 실행할 문제 JSONL 경로를 저장합니다. 상대 경로는
-`kpr-config.json`이 있는 폴더를 기준으로 합니다. 이 값을 설정하면 `run` 뒤에
+`kpr-config.json`이 있는 폴더를 기준으로 합니다. 이 값을 설정하면 `answer` 뒤에
 문제 파일 경로를 반복해서 작성하지 않아도 됩니다.
+
+`output_dir`은 문제와 테스트 모델 답변을 저장할 폴더입니다. 상대 경로는
+`kpr-config.json`이 있는 폴더를 기준으로 하며, 기본값은 `results`입니다.
 
 각 모델의 `system_instruction`을 수정하면 테스트 모델 지시문과 Judge 지시문을
 서로 독립적으로 설정할 수 있습니다. 지시문을 사용하지 않으려면 `null`로
@@ -207,22 +213,27 @@ macOS/Linux:
 
 ```bash
 ./kpr validate data/examples/problems.jsonl
-./kpr run --limit 1
+./kpr answer --limit 1
+./kpr test
 ```
 
 Windows PowerShell:
 
 ```powershell
 .\kpr.bat validate data\examples\problems.jsonl
-.\kpr.bat run --limit 1
+.\kpr.bat answer --limit 1
+.\kpr.bat test
 ```
 
-`--limit 1`을 빼면 파일의 모든 문제를 실행합니다. 문제와 모델 응답, Judge
-응답은 콘솔에만 표시되며 별도 결과 파일을 만들지 않습니다.
+`answer`에서 `--limit 1`을 빼면 파일의 모든 문제를 실행합니다. 문제와 테스트
+모델 답변은 콘솔에 표시되고 실행할 때마다
+`results/test-responses-날짜-시간.jsonl` 파일로도 저장됩니다. Judge 답변은
+`test`를 실행했을 때 콘솔에만 출력됩니다. `test`는 `results`에서 가장 최근에
+생성된 테스트 답변 파일을 자동으로 선택합니다.
 명령행에 문제 경로를 직접 쓰면 설정의 `input_path`보다 우선합니다.
 
 ```bash
-./kpr run data/examples/other-problems.jsonl --limit 1
+./kpr answer data/examples/other-problems.jsonl --limit 1
 ```
 
 ## 명령 목록
@@ -231,13 +242,15 @@ Windows PowerShell:
 |---|---|
 | `show-config` | 현재 설정 출력 |
 | `validate` | 문제 JSONL 검사 |
-| `run` | 테스트 모델 답변 생성 후 Judge 실행 |
+| `answer` | 테스트 모델 답변 생성 및 실행별 JSONL 저장 |
+| `test` | 가장 최근 저장 답변을 Judge 모델로 평가 |
 
 예시:
 
 ```bash
 ./kpr show-config
-./kpr run --help
+./kpr answer --help
+./kpr test --help
 ```
 
 Windows에서는 `./kpr`을 `.\kpr.bat`으로 바꾸면 됩니다.
@@ -268,12 +281,14 @@ API 키를 `kpr-config.json`에 직접 넣지 마세요. 설정에는 API 키 �
 ├── kpr-config.json             첫 실행 때 생성되는 실제 설정(Git 제외)
 ├── CONFIG_GUIDE.md             설정 변수와 Local/API 예시 설명
 ├── data/examples/problems.jsonl
+├── results/                    실행별 테스트 답변 JSONL(Git 제외)
 ├── src/korean_prompt_robustness/
 │   ├── cli.py                  CLI 명령
 │   ├── config.py               모델 설정
 │   ├── dataset.py              JSONL 검증
 │   ├── local_process.py        로컬 모델 실행
-│   ├── pipeline.py             테스트 → Judge 흐름
+│   ├── pipeline.py             답변 생성과 Judge 평가 흐름
+│   ├── responses.py            저장 답변 읽기와 최신 파일 선택
 │   └── providers/              모델 제공업체 연결
 ├── tests/test_framework.py
 └── pyproject.toml

@@ -100,6 +100,7 @@ class RunConfig:
     test_model: ProviderSettings
     judge_model: ProviderSettings
     input_path: str | None = None
+    output_dir: str = "results"
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "RunConfig":
@@ -110,6 +111,9 @@ class RunConfig:
             not isinstance(input_path, str) or not input_path.strip()
         ):
             raise ValueError("input_path는 내용이 있는 문자열 또는 null이어야 합니다.")
+        output_dir = value.get("output_dir", "results")
+        if not isinstance(output_dir, str) or not output_dir.strip():
+            raise ValueError("output_dir은 내용이 있는 문자열이어야 합니다.")
         return cls(
             test_model=ProviderSettings.from_dict(
                 value.get("test_model", {}), "test_model"
@@ -118,11 +122,13 @@ class RunConfig:
                 value.get("judge_model", {}), "judge_model"
             ),
             input_path=input_path.strip() if isinstance(input_path, str) else None,
+            output_dir=output_dir.strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "input_path": self.input_path,
+            "output_dir": self.output_dir,
             "test_model": self.test_model.public_dict(),
             "judge_model": self.judge_model.public_dict(),
         }

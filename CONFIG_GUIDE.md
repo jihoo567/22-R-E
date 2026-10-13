@@ -6,7 +6,8 @@ KPR은 프로젝트 루트의 `kpr-config.json`을 읽습니다. 처음 실행�
 
 - `test_model`: 문제에 답하는 모델
 - `judge_model`: 문제와 테스트 모델 답변을 검토하는 모델
-- `input_path`: `run`에서 사용할 문제 JSONL 경로
+- `input_path`: `answer`에서 사용할 문제 JSONL 경로
+- `output_dir`: 문제와 테스트 모델 답변을 저장할 폴더
 - `.env`: API 키 저장 파일. 실제 키를 JSON에 직접 쓰지 않습니다.
 
 ## 변수 설명
@@ -14,6 +15,7 @@ KPR은 프로젝트 루트의 `kpr-config.json`을 읽습니다. 처음 실행�
 | 변수 | 설명 |
 | --- | --- |
 | `input_path` | 문제 JSONL 경로입니다. 상대 경로는 `kpr-config.json`이 있는 폴더를 기준으로 합니다. 명령행에 경로를 쓰면 명령행 값이 우선합니다. |
+| `output_dir` | 실행별 테스트 답변 JSONL을 저장할 폴더입니다. 상대 경로는 설정 파일 폴더 기준이며 기본값은 `results`입니다. |
 | `provider` | `local`, `gemini`, `openai-compatible` 중 하나입니다. |
 | `model_id` | 호출할 모델 이름입니다. 로컬에서는 `command`의 모델 이름과 맞춥니다. |
 | `command` | 로컬 모델 실행 명령입니다. API 모델에서는 `null`입니다. |
@@ -42,6 +44,7 @@ system_instruction
 ```json
 {
   "input_path": "data/examples/problems.jsonl",
+  "output_dir": "results",
   "test_model": {
     "provider": "local",
     "model_id": "qwen2.5:14b",
@@ -74,6 +77,7 @@ system_instruction
 ```json
 {
   "input_path": "data/examples/problems.jsonl",
+  "output_dir": "results",
   "test_model": {
     "provider": "local",
     "model_id": "llama3.2:1b",
@@ -140,24 +144,46 @@ KPR_JUDGE_API_KEY=여기에_실제_API_키
 테스트 모델 용도라면 `KPR_TEST_API_KEY`를 사용합니다. 두 역할이 같은 키를
 공유하면 `.env`의 `OPENAI_API_KEY`를 공용으로 사용할 수도 있습니다.
 
+## 테스트 답변 저장 파일
+
+`answer`를 실행할 때마다 `output_dir` 아래에 새로운 JSONL 파일을 만듭니다.
+파일명은 `test-responses-날짜-시간.jsonl` 형식이며 기존 파일을 덮어쓰지
+않습니다. 각 줄에는 다음 값이 저장됩니다.
+
+```json
+{
+  "id": "problem-001",
+  "prompt": "모델에 전달한 문제",
+  "metadata": {"category": "knowledge"},
+  "test_model_response": "테스트 모델의 원본 답변"
+}
+```
+
+테스트 답변은 생성 직후 저장하므로 이후 Judge 호출이 실패해도 보존됩니다.
+`test`는 이 폴더에서 가장 최근에 수정된 테스트 답변 파일을 자동으로 골라
+Judge에게 전달합니다. Judge 답변은 저장 파일에 포함되지 않고 콘솔에만
+출력됩니다.
+
 ## 설정 확인과 실행
 
 macOS/Linux:
 
 ```bash
 ./kpr show-config
-./kpr run --limit 1
+./kpr answer --limit 1
+./kpr test
 ```
 
 Windows:
 
 ```bat
 kpr.bat show-config
-kpr.bat run --limit 1
+kpr.bat answer --limit 1
+kpr.bat test
 ```
 
 설정과 다른 파일을 한 번만 실행하려면 경로를 직접 입력합니다.
 
 ```bash
-./kpr run data/examples/other-problems.jsonl --limit 1
+./kpr answer data/examples/other-problems.jsonl --limit 1
 ```

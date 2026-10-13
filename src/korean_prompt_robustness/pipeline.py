@@ -1,14 +1,16 @@
-"""문제 → 테스트 모델 → Judge를 메모리에서 순서대로 실행합니다."""
+"""테스트 답변 생성과 저장된 답변 평가를 서로 분리해 실행합니다."""
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Callable
 from typing import TextIO
 
-from .config import RunConfig
+from .config import ProviderSettings
 from .dataset import Problem
 from .providers import generate_text
+from .responses import SavedResponse
 
 
 def build_judge_prompt(problem: Problem, response: str) -> str:
@@ -25,14 +27,15 @@ def build_judge_prompt(problem: Problem, response: str) -> str:
 """
 
 
-def run_benchmark(
+def generate_answers(
     problems: list[Problem],
-    config: RunConfig,
+    settings: ProviderSettings,
     *,
     output: TextIO | None = None,
+    response_output: TextIO | None = None,
     generate: Callable[..., str] = generate_text,
 ) -> int:
-    """결과 파일 없이 두 모델의 원문 응답을 콘솔에 출력합니다."""
+    """테스트 모델 답변을 생성하고 콘솔과 JSONL에 기록합니다."""
     stream = output or sys.stdout
     failures = 0
     total = len(problems)
@@ -46,8 +49,8 @@ def run_benchmark(
         try:
             test_response = generate(
                 problem.prompt,
-                config.test_model,
-                system_instruction=config.test_model.system_instruction,
+                settings,
+                system_instruction=settings.system_instruction,
             )
         except Exception as error:
             print("\n[테스트 모델 답변]", file=stream)
@@ -57,14 +60,50 @@ def run_benchmark(
 
         print("\n[테스트 모델 답변]", file=stream)
         print(test_response, file=stream, flush=True)
+        if response_output is not None:
+            json.dump(
+                SavedResponse(problem, test_response).to_dict(),
+                response_output,
+                ensure_ascii=False,
+            )
+            response_output.write("\n")
+            response_output.flush()
 
-        rendered_prompt = build_judge_prompt(problem, test_response)
+    print("=" * 72, file=stream)
+    summary = f"답변 생성 완료: {total}개 문제"
+    if failures:
+        summary += f", 실패 {failures}개"
+    print(summary, file=stream, flush=True)
+    return failures
+
+
+def evaluate_answers(
+    responses: list[SavedResponse],
+    settings: ProviderSettings,
+    *,
+    output: TextIO | None = None,
+    generate: Callable[..., str] = generate_text,
+) -> int:
+    """저장된 테스트 답변을 Judge 모델로 평가해 콘솔에 출력합니다."""
+    stream = output or sys.stdout
+    failures = 0
+    total = len(responses)
+
+    for index, saved in enumerate(responses, 1):
+        problem = saved.problem
+        print("=" * 72, file=stream)
+        print(f"[{index}/{total}] 문제 ID: {problem.id}", file=stream)
+        print("\n[문제]", file=stream)
+        print(problem.prompt, file=stream)
+        print("\n[테스트 모델 답변]", file=stream)
+        print(saved.test_model_response, file=stream)
         print("\n[Judge 모델 답변]", file=stream)
+        rendered_prompt = build_judge_prompt(problem, saved.test_model_response)
         try:
             judge_response = generate(
                 rendered_prompt,
-                config.judge_model,
-                system_instruction=config.judge_model.system_instruction,
+                settings,
+                system_instruction=settings.system_instruction,
             )
         except Exception as error:
             failures += 1
@@ -77,7 +116,7 @@ def run_benchmark(
             print(judge_response, file=stream, flush=True)
 
     print("=" * 72, file=stream)
-    summary = f"실행 완료: {total}개 문제"
+    summary = f"평가 완료: {total}개 답변"
     if failures:
         summary += f", 실패 {failures}개"
     print(summary, file=stream, flush=True)

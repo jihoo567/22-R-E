@@ -21,7 +21,12 @@ from korean_prompt_robustness.config import (
 from korean_prompt_robustness.local_process import command_executable, prepare_command
 from korean_prompt_robustness.providers import generate_text
 from korean_prompt_robustness.providers.gemini import extract_text
-from korean_prompt_robustness.pipeline import build_judge_prompt, run_benchmark
+from korean_prompt_robustness.pipeline import (
+    build_judge_prompt,
+    evaluate_answers,
+    generate_answers,
+)
+from korean_prompt_robustness.responses import SavedResponse, load_saved_responses
 from korean_prompt_robustness.dataset import load_and_validate_dataset, validate_dataset
 
 
@@ -153,6 +158,7 @@ class SchemaAndConfigTests(unittest.TestCase):
         self.assertEqual("qwen2.5:14b", config.test_model.model_id)
         self.assertEqual("local", config.judge_model.provider)
         self.assertEqual("data/examples/problems.jsonl", config.input_path)
+        self.assertEqual("results", config.output_dir)
         self.assertFalse(any(key.startswith("_") for key in raw))
         self.assertNotIn("api_examples", raw)
 
@@ -208,6 +214,24 @@ class SchemaAndConfigTests(unittest.TestCase):
                 }
             )
 
+    def test_blank_output_dir_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "output_dir"):
+            RunConfig.from_dict(
+                {
+                    "output_dir": "   ",
+                    "test_model": {
+                        "provider": "local",
+                        "model_id": "test",
+                        "command": stdin_echo_command(),
+                    },
+                    "judge_model": {
+                        "provider": "local",
+                        "model_id": "judge",
+                        "command": stdin_echo_command(),
+                    },
+                }
+            )
+
     def test_help_points_to_markdown_config_guide(self):
         stdout = io.StringIO()
         with redirect_stdout(stdout), self.assertRaises(SystemExit) as exit_context:
@@ -239,7 +263,7 @@ class SchemaAndConfigTests(unittest.TestCase):
                 "test_model",
             )
 
-    def test_run_refuses_to_start_without_config_file(self):
+    def test_answer_refuses_to_start_without_config_file(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             input_path = base / "problems.jsonl"
@@ -251,7 +275,7 @@ class SchemaAndConfigTests(unittest.TestCase):
             with redirect_stderr(stderr), self.assertRaises(SystemExit):
                 main(
                     [
-                        "run",
+                        "answer",
                         str(input_path),
                         "--settings",
                         str(base / "missing.json"),
@@ -399,7 +423,7 @@ class AdapterTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
-    def test_run_uses_input_path_from_config(self):
+    def test_answer_uses_input_path_from_config(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             settings_path = base / "kpr-config.json"
@@ -412,18 +436,34 @@ class PipelineTests(unittest.TestCase):
                 settings_path,
                 RunConfig(
                     local_settings("test"),
-                    local_settings("judge"),
+                    ProviderSettings(
+                        provider="local",
+                        model_id="unused-judge",
+                        command="missing-judge-command",
+                    ),
                     input_path="problems.jsonl",
+                    output_dir="saved-responses",
                 ),
             )
             stdout = io.StringIO()
             with redirect_stdout(stdout):
-                main(["run", "--settings", str(settings_path)])
+                main(["answer", "--settings", str(settings_path)])
+            response_paths = list((base / "saved-responses").glob("*.jsonl"))
+            saved_record = json.loads(
+                response_paths[0].read_text(encoding="utf-8")
+            )
 
         self.assertIn("[테스트 모델 답변]", stdout.getvalue())
-        self.assertIn("[Judge 모델 답변]", stdout.getvalue())
+        self.assertNotIn("[Judge 모델 답변]", stdout.getvalue())
+        self.assertIn("테스트 모델 응답 저장:", stdout.getvalue())
+        self.assertEqual(1, len(response_paths))
+        self.assertEqual("problem-001", saved_record["id"])
+        self.assertEqual(problem_record()["prompt"], saved_record["prompt"])
+        self.assertEqual(
+            problem_record()["prompt"], saved_record["test_model_response"]
+        )
 
-    def test_run_requires_command_or_config_input_path(self):
+    def test_answer_requires_command_or_config_input_path(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_path = Path(directory) / "kpr-config.json"
             write_config(
@@ -432,11 +472,11 @@ class PipelineTests(unittest.TestCase):
             )
             stderr = io.StringIO()
             with redirect_stderr(stderr), self.assertRaises(SystemExit):
-                main(["run", "--settings", str(settings_path)])
+                main(["answer", "--settings", str(settings_path)])
 
         self.assertIn("input_path", stderr.getvalue())
 
-    def test_command_input_overrides_config_input_path(self):
+    def test_answer_command_input_overrides_config_input_path(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             settings_path = base / "kpr-config.json"
@@ -455,10 +495,10 @@ class PipelineTests(unittest.TestCase):
             )
             stdout = io.StringIO()
             with redirect_stdout(stdout):
-                main(["run", str(input_path), "--settings", str(settings_path)])
+                main(["answer", str(input_path), "--settings", str(settings_path)])
 
         self.assertIn("[테스트 모델 답변]", stdout.getvalue())
-        self.assertIn("[Judge 모델 답변]", stdout.getvalue())
+        self.assertNotIn("[Judge 모델 답변]", stdout.getvalue())
 
     def test_failures_are_counted_and_later_problems_continue(self):
         problems = validate_dataset([problem_record("first"), problem_record("second")])
@@ -467,47 +507,171 @@ class PipelineTests(unittest.TestCase):
 
         def generate(prompt, settings, **kwargs):
             calls.append(prompt)
-            if "first" in prompt or settings.model_id == "judge":
+            if "first" in prompt:
                 raise RuntimeError("예상된 실패")
             return "답변"
 
         output = io.StringIO()
-        failures = run_benchmark(problems, config, generate=generate, output=output)
-        self.assertEqual(2, failures)
-        self.assertEqual(3, len(calls))
-        self.assertIn("실패 2개", output.getvalue())
+        response_output = io.StringIO()
+        failures = generate_answers(
+            problems,
+            config.test_model,
+            generate=generate,
+            output=output,
+            response_output=response_output,
+        )
+        self.assertEqual(1, failures)
+        self.assertEqual(2, len(calls))
+        self.assertIn("실패 1개", output.getvalue())
+        saved_records = [
+            json.loads(line) for line in response_output.getvalue().splitlines()
+        ]
+        self.assertEqual(["second"], [record["id"] for record in saved_records])
 
-    def test_pipeline_prints_both_answers_without_result_files(self):
+    def test_generate_answers_prints_and_saves_test_response(self):
         problems = validate_dataset([problem_record()])
         config = RunConfig(
             local_settings("test", "테스트 모델 지시문"),
             local_settings("judge", "Judge 모델 지시문"),
         )
         output = io.StringIO()
+        response_output = io.StringIO()
         calls = []
 
         def generate(prompt, settings, **kwargs):
             calls.append((prompt, settings, kwargs))
-            if settings.model_id == "test":
-                return "테스트 답변: problem-001"
-            return "Judge 답변: 적절합니다."
+            return "테스트 답변: problem-001"
 
-        failures = run_benchmark(problems, config, generate=generate, output=output)
+        failures = generate_answers(
+            problems,
+            config.test_model,
+            generate=generate,
+            output=output,
+            response_output=response_output,
+        )
 
         printed = output.getvalue()
         self.assertIn("[테스트 모델 답변]", printed)
         self.assertIn("테스트 답변: problem-001", printed)
-        self.assertIn("[Judge 모델 답변]", printed)
-        self.assertIn("Judge 답변:", printed)
+        self.assertNotIn("[Judge 모델 답변]", printed)
         self.assertEqual(0, failures)
         self.assertEqual(problems[0].prompt, calls[0][0])
         self.assertEqual(
             "테스트 모델 지시문", calls[0][2]["system_instruction"]
         )
-        self.assertIn("테스트 답변: problem-001", calls[1][0])
-        self.assertEqual(
-            "Judge 모델 지시문", calls[1][2]["system_instruction"]
+        saved = json.loads(response_output.getvalue())
+        self.assertEqual(problem_record()["prompt"], saved["prompt"])
+        self.assertEqual("테스트 답변: problem-001", saved["test_model_response"])
+        self.assertEqual(1, len(calls))
+
+    def test_evaluate_answers_calls_only_judge_model(self):
+        problem = validate_dataset([problem_record()])[0]
+        responses = [SavedResponse(problem, "저장된 테스트 답변")]
+        settings = local_settings("judge", "Judge 모델 지시문")
+        calls = []
+
+        def generate(prompt, received_settings, **kwargs):
+            calls.append((prompt, received_settings, kwargs))
+            return "Judge 평가 결과"
+
+        output = io.StringIO()
+        failures = evaluate_answers(
+            responses,
+            settings,
+            output=output,
+            generate=generate,
         )
+
+        self.assertEqual(0, failures)
+        self.assertEqual(1, len(calls))
+        self.assertEqual("judge", calls[0][1].model_id)
+        self.assertIn("저장된 테스트 답변", calls[0][0])
+        self.assertEqual("Judge 모델 지시문", calls[0][2]["system_instruction"])
+        self.assertIn("Judge 평가 결과", output.getvalue())
+
+    def test_test_command_uses_most_recent_saved_answers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            results = base / "results"
+            results.mkdir()
+            problem = validate_dataset([problem_record()])[0]
+            older = results / "test-responses-older.jsonl"
+            newer = results / "test-responses-newer.jsonl"
+            older.write_text(
+                json.dumps(
+                    SavedResponse(problem, "오래된 답변").to_dict(),
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            newer.write_text(
+                json.dumps(
+                    SavedResponse(problem, "가장 최근 답변").to_dict(),
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
+            settings_path = base / "kpr-config.json"
+            write_config(
+                settings_path,
+                RunConfig(
+                    ProviderSettings(
+                        provider="local",
+                        model_id="unused-test",
+                        command="missing-test-command",
+                    ),
+                    local_settings("judge"),
+                    output_dir="results",
+                ),
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                main(["test", "--settings", str(settings_path)])
+
+        printed = stdout.getvalue()
+        self.assertIn(str(newer), printed)
+        self.assertIn("가장 최근 답변", printed)
+        self.assertNotIn("오래된 답변", printed)
+
+    def test_test_command_requires_saved_answers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            settings_path = base / "kpr-config.json"
+            write_config(
+                settings_path,
+                RunConfig(
+                    local_settings("test"),
+                    local_settings("judge"),
+                    output_dir="results",
+                ),
+            )
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                main(["test", "--settings", str(settings_path)])
+
+        self.assertIn("answer 명령을 먼저 실행", stderr.getvalue())
+
+    def test_saved_response_file_round_trip(self):
+        problem = validate_dataset([problem_record()])[0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test-responses-example.jsonl"
+            path.write_text(
+                json.dumps(
+                    SavedResponse(problem, "원본 답변").to_dict(),
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = load_saved_responses(path)
+
+        self.assertEqual(problem, loaded[0].problem)
+        self.assertEqual("원본 답변", loaded[0].test_model_response)
 
     def test_cli_exits_with_error_when_a_model_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -535,11 +699,11 @@ class PipelineTests(unittest.TestCase):
             with redirect_stdout(stdout), redirect_stderr(stderr), self.assertRaises(
                 SystemExit
             ) as raised:
-                main(["run", str(input_path), "--settings", str(settings_path)])
+                main(["answer", str(input_path), "--settings", str(settings_path)])
 
         self.assertEqual(2, raised.exception.code)
         self.assertIn(
-            "1개 문제에서 모델 실행 또는 평가가 실패했습니다",
+            "1개 문제에서 답변 생성이 실패했습니다",
             stderr.getvalue(),
         )
 
