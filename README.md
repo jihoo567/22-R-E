@@ -2,14 +2,16 @@
 
 준비된 JSONL 문제를 테스트 모델에 보내고, 그 답변을 Judge 모델에 전달한 뒤
 두 응답을 콘솔에 출력하는 최소 Python 벤치마크입니다. 문제와 테스트 모델
-답변은 실행별 JSONL 파일에도 저장합니다. 현재 버전은 `0.6.0`입니다.
+답변은 실행별 JSONL 파일에도 저장합니다. 현재 버전은 `0.7.0`입니다.
 
 ```text
-answer: 문제 JSONL → 테스트 모델 → 테스트 답변 파일
-test:   가장 최근 답변 파일 → Judge 모델 → 콘솔
+variants: 원본 문제 JSONL → 조사·생략 변형 → 변형 문제 JSONL   (선택)
+answer:   문제 JSONL → 테스트 모델 → 테스트 답변 파일
+test:     가장 최근 답변 파일 → Judge 모델 → 콘솔
 ```
 
-문제 생성, 점수 계산, 그래프와 보고서 기능은 포함하지 않습니다. 테스트 모델과
+원본 문제의 조사 변형과 생략 변형은 `variants`로 자동 생성할 수 있습니다.
+그 밖의 문제 생성, 점수 계산, 그래프와 보고서 기능은 포함하지 않습니다. 테스트 모델과
 Judge 모델은 로컬 Ollama, Gemini API, OpenAI 호환 API 중에서 각각 독립적으로
 선택할 수 있습니다.
 
@@ -244,6 +246,7 @@ Windows PowerShell:
 | `validate` | 문제 JSONL 검사 |
 | `answer` | 테스트 모델 답변 생성 및 실행별 JSONL 저장 |
 | `test` | 가장 최근 저장 답변을 Judge 모델로 평가 |
+| `variants` | 원본 문제의 조사·생략 변형 문제 JSONL 생성 |
 
 예시:
 
@@ -256,6 +259,69 @@ Windows PowerShell:
 Windows에서는 `./kpr`을 `.\kpr.bat`으로 바꾸면 됩니다.
 
 모델 설정은 `kpr-config.json`을 직접 수정합니다.
+
+## 조사·생략 변형 문제 만들기
+
+`variants`는 원본 문제마다 조사 변형과 생략 변형을 만들어, `answer`에서 바로
+쓸 수 있는 문제 JSONL로 저장합니다. 형태소 분석기 kiwipiepy를 사용하며, 다른
+의존성과 마찬가지로 처음 실행할 때 자동으로 설치됩니다.
+
+macOS/Linux:
+
+```bash
+./kpr variants data/examples/problems.jsonl -o data/examples/problems-particle-omission.jsonl
+./kpr answer data/examples/problems-particle-omission.jsonl
+```
+
+Windows PowerShell:
+
+```powershell
+.\kpr.bat variants data\examples\problems.jsonl -o data\examples\problems-particle-omission.jsonl
+.\kpr.bat answer data\examples\problems-particle-omission.jsonl
+```
+
+경로를 생략하면 설정의 `input_path`를 읽고, `-o`를 생략하면 입력 옆에
+`<이름>-variants.jsonl`로 저장합니다. 이미 있는 파일은 `--force` 없이는 덮어쓰지
+않습니다. 예제로 만든 결과가 `data/examples/problems-particle-omission.jsonl`에
+들어 있습니다.
+
+| 변형 종류 | 라벨 | 하는 일 | 예 |
+|---|---|---|---|
+| `particle` | 조사·주제화 | 주격·목적격 조사 생략 | `문제를 푸는` → `문제 푸는` |
+| | | 뜻이 같은 조사로 치환 | `nums1과` → `nums1하고`, `철수에게` → `철수한테` |
+| `omission` | 생략·압축 | 앞에 나온 주어를 다시 쓸 때 생략 | `철수가 갔다. 철수가 웃었다.` → `철수가 갔다. 웃었다.` |
+| | | 지시어 생략 | `이것이 gradient …` → `gradient …` |
+
+원본 하나에서 다음 레코드를 만듭니다. id와 metadata는 기존 예제 파일과 같은
+형식입니다.
+
+| id | track | 내용 |
+|---|---|---|
+| `{base_id}-original` | `baseline` | 원본 그대로 |
+| `{base_id}-particle-NN`, `{base_id}-omission-NN` | `controlled_operator` | 자리 하나만 바꾼 변형 |
+| `{base_id}-mixed-NN` | `synthetic_naturalistic` | 조사·생략 편집을 겹치지 않게 섞은 변형 |
+
+- 모든 변형은 `semantic_preservation: "pending_human_review"`로 표시합니다.
+  사람이 검수할 대상입니다.
+- `edit_operations`에는 바뀐 어절의 `before`/`after`와 함께 원문 위치(`start`),
+  만든 변형기(`transforms`), 설명(`labels`)을 남깁니다.
+- 코드 블록, 인라인 코드, URL 안은 바꾸지 않습니다.
+- 원문과 같거나 이미 만든 것과 같은 변형은 버리므로, 반복 주어나 지시어가 없는
+  문제에서는 `omission`이 0개일 수 있습니다.
+- 같은 `--seed`로 실행하면 항상 같은 파일이 나옵니다.
+
+| 옵션 | 설명 |
+|---|---|
+| `--types` | 만들 종류. 기본 `particle,omission` |
+| `--per-type` | 종류별 변형 수. 기본 3 |
+| `--mixed` | 섞은 변형 수. 기본 8, `0`이면 만들지 않음 |
+| `--seed` | 난수 시드. 기본 0 |
+| `--keep-existing` | 입력에 있던 변형도 함께 저장. 새 번호는 기존 번호 뒤에 이어 붙여 id가 겹치지 않음 |
+| `--force` | 출력 파일 덮어쓰기 |
+
+변형기는 prompt_modify 프로젝트의
+`josa_omit`, `josa_swap`, `subject_drop`, `deixis_drop`을
+`src/korean_prompt_robustness/variants/`로 옮겨 온 것입니다.
 
 ## API 키를 찾는 순서
 
@@ -289,8 +355,10 @@ API 키를 `kpr-config.json`에 직접 넣지 마세요. 설정에는 API 키 �
 │   ├── local_process.py        로컬 모델 실행
 │   ├── pipeline.py             답변 생성과 Judge 평가 흐름
 │   ├── responses.py            저장 답변 읽기와 최신 파일 선택
-│   └── providers/              모델 제공업체 연결
+│   ├── providers/              모델 제공업체 연결
+│   └── variants/               조사·생략 변형 생성(kiwipiepy)
 ├── tests/test_framework.py
+├── tests/test_variants.py
 └── pyproject.toml
 ```
 

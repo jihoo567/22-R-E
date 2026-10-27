@@ -99,6 +99,51 @@ def build_parser() -> argparse.ArgumentParser:
         "test", help="가장 최근에 저장된 테스트 답변을 Judge로 평가"
     )
     _add_settings_argument(test)
+
+    variants = subparsers.add_parser(
+        "variants",
+        help="원본 문제의 조사·생략 변형 문제 JSONL 생성",
+        description=(
+            "원본 문제마다 조사 변형(particle)과 생략 변형(omission)을 만들어 "
+            "answer에서 바로 쓸 수 있는 문제 JSONL로 저장합니다."
+        ),
+    )
+    variants.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        help="원본 문제 JSONL 경로(생략하면 설정의 input_path 사용)",
+    )
+    variants.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="저장할 JSONL 경로(생략하면 입력 옆 '<이름>-variants.jsonl')",
+    )
+    variants.add_argument(
+        "--types",
+        default="particle,omission",
+        help="만들 변형 종류를 쉼표로 (기본: %(default)s)",
+    )
+    variants.add_argument(
+        "--per-type", type=int, default=3, help="종류별 변형 수 (기본: %(default)s)"
+    )
+    variants.add_argument(
+        "--mixed",
+        type=int,
+        default=8,
+        help="여러 종류를 섞은 변형 수, 0이면 만들지 않음 (기본: %(default)s)",
+    )
+    variants.add_argument("--seed", type=int, default=0, help="난수 시드 (기본: %(default)s)")
+    variants.add_argument(
+        "--keep-existing",
+        action="store_true",
+        help="입력에 있던 변형 문제도 함께 저장(새 번호는 기존 번호 뒤에 이어 붙임)",
+    )
+    variants.add_argument(
+        "--force", action="store_true", help="출력 파일이 이미 있으면 덮어쓰기"
+    )
+    _add_settings_argument(variants)
     return parser
 
 
@@ -109,19 +154,27 @@ def _output_dir(config: RunConfig, settings_path: Path) -> Path:
     return output_dir
 
 
+def _input_path(args: argparse.Namespace, config: RunConfig | None) -> Path:
+    """명령행 경로를 우선하고, 없으면 설정의 input_path를 씁니다."""
+    if args.input is not None:
+        return args.input
+    if config is None:
+        config = load_config(args.settings)
+    if config.input_path is None:
+        raise ValueError(
+            f"문제 JSONL 경로가 없습니다. {args.command} 뒤에 경로를 입력하거나 "
+            "kpr-config.json의 input_path를 설정하세요."
+        )
+    input_path = Path(config.input_path).expanduser()
+    if not input_path.is_absolute():
+        input_path = args.settings.parent / input_path
+    return input_path
+
+
 def _answer(args: argparse.Namespace) -> None:
     config = load_config(args.settings)
     _validate_model(config.test_model, "테스트 모델")
-    input_path = args.input
-    if input_path is None:
-        if config.input_path is None:
-            raise ValueError(
-                "문제 JSONL 경로가 없습니다. answer 뒤에 경로를 입력하거나 "
-                "kpr-config.json의 input_path를 설정하세요."
-            )
-        input_path = Path(config.input_path).expanduser()
-        if not input_path.is_absolute():
-            input_path = args.settings.parent / input_path
+    input_path = _input_path(args, config)
     problems = load_and_validate_dataset(input_path, limit=args.limit)
 
     print(
@@ -156,6 +209,54 @@ def _test(args: argparse.Namespace) -> None:
         raise RuntimeError(f"{failed}개 답변 평가가 실패했습니다.")
 
 
+def _variants(args: argparse.Namespace) -> None:
+    input_path = _input_path(args, None)
+    output_path = args.output or input_path.with_name(f"{input_path.stem}-variants.jsonl")
+    if output_path.resolve() == input_path.resolve():
+        raise ValueError("출력 경로가 입력 문제 파일과 같습니다. -o로 다른 경로를 지정하세요.")
+    if output_path.exists() and not args.force:
+        raise ValueError(f"출력 파일이 이미 있습니다: {output_path} (덮어쓰려면 --force)")
+    for name in ("per_type", "mixed"):
+        if getattr(args, name) < 0:
+            raise ValueError(f"--{name.replace('_', '-')}은 0 이상이어야 합니다.")
+
+    # kiwipiepy를 불러오므로 이 명령에서만 import합니다.
+    try:
+        from .variants import export
+    except ImportError as error:
+        raise RuntimeError(
+            f"변형 생성에 필요한 패키지를 불러오지 못했습니다({error.name}). "
+            "./kpr --help 또는 kpr.bat --help를 한 번 실행하면 자동으로 설치됩니다."
+        ) from error
+
+    load_and_validate_dataset(input_path)  # answer와 같은 규칙으로 먼저 검사
+    with input_path.open(encoding="utf-8") as file:
+        records = [json.loads(line) for line in file if line.strip()]
+    print(f"변형 생성 중: {input_path}", flush=True)
+    problems = export(
+        records,
+        types=[t.strip() for t in args.types.split(",") if t.strip()],
+        per_type=args.per_type,
+        mixed=args.mixed,
+        seed=args.seed,
+        keep_existing=args.keep_existing,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="\n") as output:
+        for problem in problems:
+            output.write(json.dumps(problem, ensure_ascii=False, separators=(",", ":")))
+            output.write("\n")
+
+    counts: dict[str, int] = {}
+    for problem in problems:
+        variant_type = problem["metadata"].get("variant_type", "?")
+        counts[variant_type] = counts.get(variant_type, 0) + 1
+    summary = ", ".join(f"{name} {count}" for name, count in counts.items())
+    print(f"저장: {output_path} ({len(problems)}개 문제: {summary})")
+    print(f"실행: kpr answer {output_path}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -170,6 +271,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"검증 성공: {len(problems)}개 문제")
         elif args.command == "answer":
             _answer(args)
+        elif args.command == "variants":
+            _variants(args)
         else:
             _test(args)
     except (OSError, RuntimeError, ValueError) as error:
