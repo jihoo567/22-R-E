@@ -2,15 +2,16 @@
 
 준비된 JSONL 문제를 테스트 모델에 보내고, 그 답변을 Judge 모델에 전달한 뒤
 두 응답을 콘솔에 출력하는 최소 Python 벤치마크입니다. 문제와 테스트 모델
-답변은 실행별 JSONL 파일에도 저장합니다. 현재 버전은 `0.7.0`입니다.
+답변은 실행별 JSONL 파일에도 저장합니다. 현재 버전은 `0.8.0`입니다.
 
 ```text
-variants: 원본 문제 JSONL → 조사·생략 변형 → 변형 문제 JSONL   (선택)
+variants: 원본 문제 JSONL → 높임법·조사·생략 변형 → 변형 문제 JSONL   (선택)
 answer:   문제 JSONL → 테스트 모델 → 테스트 답변 파일
 test:     가장 최근 답변 파일 → Judge 모델 → 콘솔
 ```
 
-원본 문제의 조사 변형과 생략 변형은 `variants`로 자동 생성할 수 있습니다.
+원본 문제의 높임법(격식체·비격식체), 조사, 생략 변형은 `variants`로 자동 생성할 수
+있습니다.
 그 밖의 문제 생성, 점수 계산, 그래프와 보고서 기능은 포함하지 않습니다. 테스트 모델과
 Judge 모델은 로컬 Ollama, Gemini API, OpenAI 호환 API 중에서 각각 독립적으로
 선택할 수 있습니다.
@@ -246,7 +247,7 @@ Windows PowerShell:
 | `validate` | 문제 JSONL 검사 |
 | `answer` | 테스트 모델 답변 생성 및 실행별 JSONL 저장 |
 | `test` | 가장 최근 저장 답변을 Judge 모델로 평가 |
-| `variants` | 원본 문제의 조사·생략 변형 문제 JSONL 생성 |
+| `variants` | 원본 문제의 높임법·조사·생략 변형 문제 JSONL 생성 |
 
 예시:
 
@@ -260,33 +261,35 @@ Windows에서는 `./kpr`을 `.\kpr.bat`으로 바꾸면 됩니다.
 
 모델 설정은 `kpr-config.json`을 직접 수정합니다.
 
-## 조사·생략 변형 문제 만들기
+## 높임법·조사·생략 변형 문제 만들기
 
-`variants`는 원본 문제마다 조사 변형과 생략 변형을 만들어, `answer`에서 바로
-쓸 수 있는 문제 JSONL로 저장합니다. 형태소 분석기 kiwipiepy를 사용하며, 다른
-의존성과 마찬가지로 처음 실행할 때 자동으로 설치됩니다.
+`variants`는 원본 문제마다 높임법 변형, 조사 변형, 생략 변형을 만들어,
+`answer`에서 바로 쓸 수 있는 문제 JSONL로 저장합니다. 형태소 분석기 kiwipiepy와
+활용 사전 koparadigm을 사용하며, 다른 의존성과 마찬가지로 처음 실행할 때 자동으로
+설치됩니다.
 
 macOS/Linux:
 
 ```bash
-./kpr variants data/examples/problems.jsonl -o data/examples/problems-particle-omission.jsonl
-./kpr answer data/examples/problems-particle-omission.jsonl
+./kpr variants data/examples/problems.jsonl
+./kpr answer data/examples/problems-variants.jsonl
 ```
 
 Windows PowerShell:
 
 ```powershell
-.\kpr.bat variants data\examples\problems.jsonl -o data\examples\problems-particle-omission.jsonl
-.\kpr.bat answer data\examples\problems-particle-omission.jsonl
+.\kpr.bat variants data\examples\problems.jsonl
+.\kpr.bat answer data\examples\problems-variants.jsonl
 ```
 
 경로를 생략하면 설정의 `input_path`를 읽고, `-o`를 생략하면 입력 옆에
 `<이름>-variants.jsonl`로 저장합니다. 이미 있는 파일은 `--force` 없이는 덮어쓰지
-않습니다. 예제로 만든 결과가 `data/examples/problems-particle-omission.jsonl`에
-들어 있습니다.
+않습니다. 예제로 만든 결과가 `data/examples/problems-variants.jsonl`에 들어
+있습니다.
 
 | 변형 종류 | 라벨 | 하는 일 | 예 |
 |---|---|---|---|
+| `ending` | 높임법·어미 | 문장을 끝맺는 어미를 화계 하나로 바꿈 | `도와주세요.` → `도와주십시오.` / `도와줘.` |
 | `particle` | 조사·주제화 | 주격·목적격 조사 생략 | `문제를 푸는` → `문제 푸는` |
 | | | 뜻이 같은 조사로 치환 | `nums1과` → `nums1하고`, `철수에게` → `철수한테` |
 | `omission` | 생략·압축 | 앞에 나온 주어를 다시 쓸 때 생략 | `철수가 갔다. 철수가 웃었다.` → `철수가 갔다. 웃었다.` |
@@ -298,8 +301,41 @@ Windows PowerShell:
 | id | track | 내용 |
 |---|---|---|
 | `{base_id}-original` | `baseline` | 원본 그대로 |
+| `{base_id}-ending-NN` | `controlled_operator` | 화계 하나로 글 전체를 바꾼 변형 |
 | `{base_id}-particle-NN`, `{base_id}-omission-NN` | `controlled_operator` | 자리 하나만 바꾼 변형 |
-| `{base_id}-mixed-NN` | `synthetic_naturalistic` | 조사·생략 편집을 겹치지 않게 섞은 변형 |
+| `{base_id}-mixed-NN` | `synthetic_naturalistic` | 여러 종류의 편집을 겹치지 않게 섞은 변형 |
+
+### 격식체와 비격식체
+
+`ending`은 `--levels`에 적은 순서대로 화계를 하나씩 적용해, 원문과 달라지는 앞의
+`--per-type`개를 씁니다. 기본 순서는 `formal,banmal,polite,plain`입니다. 원문이
+이미 그 화계면 건너뛰므로, 해요체 원문에서는 합쇼체·해체·해라체가 만들어집니다.
+
+| 이름 | 화계 | 구분 | 높임 | `도와주세요.` → | `설명하십시오.` → |
+|---|---|---|---|---|---|
+| `formal` | 합쇼체 | 격식체 | 아주높임 | `도와주십시오.` | (원문과 같음) |
+| `plain` | 해라체 | 격식체 | 아주낮춤 | `도와줘라.` | `설명해라.` |
+| `polite` | 해요체 | 비격식체 | 두루높임 | (원문과 같음) | `설명하세요.` |
+| `banmal` | 해체 | 비격식체 | 두루낮춤 | `도와줘.` | `설명해.` |
+| `hao` | 하오체 | 격식체 | 예사높임 | 기본 제외 | 기본 제외 |
+| `familiar` | 하게체 | 격식체 | 예사낮춤 | 기본 제외 | 기본 제외 |
+
+하오체·하게체는 예스러운 말투라 기본에서 뺐습니다. 쓰려면
+`--levels formal,hao,familiar`처럼 직접 지정합니다.
+
+`ending` 변형과 `ending`이 섞인 `mixed` 변형에는 적용한 화계가 `speech_level`로
+남아, 격식체·비격식체별로 결과를 나눠 볼 수 있습니다.
+
+```json
+"speech_level": {"name": "banmal", "korean": "해체", "formality": "비격식체", "politeness": "두루낮춤"}
+```
+
+- 프롬프트는 대부분 요청문이므로, 평서와 명령을 겸하는 `-세요`는 명령으로 봅니다.
+  그래서 `도와주세요`는 `도와주십니다`(평서)가 아니라 `도와주십시오`가 됩니다.
+- 연결어미(`읽고`, `주어졌을 때`)는 그대로 두고 문장을 끝맺는 어미만 바꿉니다.
+- 주체높임 `-시-`는 높이는 화계에서는 남기고(`가셨다` → `가셨습니다`), 낮추는
+  화계(해라체·해체)에서는 뗍니다(`하십시오` → `해라`, `가셨다` → `갔어`).
+- 불규칙 활용은 koparadigm이 맡습니다(`듣는다` → `들어요`, `돕는다` → `도와요`).
 
 - 모든 변형은 `semantic_preservation: "pending_human_review"`로 표시합니다.
   사람이 검수할 대상입니다.
@@ -312,16 +348,17 @@ Windows PowerShell:
 
 | 옵션 | 설명 |
 |---|---|
-| `--types` | 만들 종류. 기본 `particle,omission` |
+| `--types` | 만들 종류. 기본 `ending,particle,omission` |
+| `--levels` | `ending`에 쓸 화계 순서. 기본 `formal,banmal,polite,plain` |
 | `--per-type` | 종류별 변형 수. 기본 3 |
 | `--mixed` | 섞은 변형 수. 기본 8, `0`이면 만들지 않음 |
 | `--seed` | 난수 시드. 기본 0 |
 | `--keep-existing` | 입력에 있던 변형도 함께 저장. 새 번호는 기존 번호 뒤에 이어 붙여 id가 겹치지 않음 |
 | `--force` | 출력 파일 덮어쓰기 |
 
-변형기는 prompt_modify 프로젝트의
-`josa_omit`, `josa_swap`, `subject_drop`, `deixis_drop`을
-`src/korean_prompt_robustness/variants/`로 옮겨 온 것입니다.
+변형기는 prompt_modify 프로젝트의 `honorific`, `josa_omit`, `josa_swap`,
+`subject_drop`, `deixis_drop`을 `src/korean_prompt_robustness/variants/`로 옮겨 온
+것입니다.
 
 ## API 키를 찾는 순서
 
@@ -356,7 +393,7 @@ API 키를 `kpr-config.json`에 직접 넣지 마세요. 설정에는 API 키 �
 │   ├── pipeline.py             답변 생성과 Judge 평가 흐름
 │   ├── responses.py            저장 답변 읽기와 최신 파일 선택
 │   ├── providers/              모델 제공업체 연결
-│   └── variants/               조사·생략 변형 생성(kiwipiepy)
+│   └── variants/               높임법·조사·생략 변형 생성(kiwipiepy, koparadigm)
 ├── tests/test_framework.py
 ├── tests/test_variants.py
 └── pyproject.toml

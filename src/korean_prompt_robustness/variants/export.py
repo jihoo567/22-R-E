@@ -1,4 +1,4 @@
-"""원본 문제로 조사·생략 변형 문제 레코드를 만듭니다.
+"""원본 문제로 높임법·조사·생략 변형 문제 레코드를 만듭니다.
 
 `data/examples/problems.jsonl` 과 같은 스키마로 내보냅니다.
 
@@ -6,9 +6,10 @@
     변형  {base_id}-{variant_type}-NN  track=controlled_operator  (변형 종류 하나)
     혼합  {base_id}-mixed-NN           track=synthetic_naturalistic (여러 종류)
 
-변형 하나는 자리 하나만 바꿉니다. 혼합은 서로 다른 종류의 편집을 겹치지 않게
-2개 이상 합칩니다. 원문과 같거나 이미 만든 변형과 같은 결과는 버리므로,
-프롬프트에 따라 종류별 개수가 모자랄 수 있습니다.
+`ending` 은 화계 하나로 글 전체의 종결어미를 바꿉니다(화계마다 변형 하나).
+`particle`, `omission` 은 변형 하나가 자리 하나만 바꿉니다. 혼합은 서로 다른
+종류의 편집을 겹치지 않게 2개 이상 합칩니다. 원문과 같거나 이미 만든 변형과
+같은 결과는 버리므로, 프롬프트에 따라 종류별 개수가 모자랄 수 있습니다.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ from ..dataset import validate_dataset
 from .core import Edit, apply_edits, group_sites, transforms
 
 __all__ = [
+    "DEFAULT_LEVELS",
     "FAMILIES",
+    "SPEECH_LEVELS",
     "Candidate",
     "Family",
     "candidates",
@@ -52,9 +55,11 @@ class Family:
     label: str
     transforms: tuple[str, ...]
     features: Mapping[str, tuple[str, ...]]     # 변형기 -> changed_features
+    mode: str = "site"                          # site: 자리 하나씩 / level: 화계별 전체 적용
 
 
 FAMILIES: tuple[Family, ...] = (
+    Family("ending", "높임법·어미", ("honorific",), {"honorific": ("ending",)}, mode="level"),
     Family("particle", "조사·주제화", ("josa_omit", "josa_swap"),
            {"josa_omit": ("particle", "omission_or_coordination"),
             "josa_swap": ("particle",)}),
@@ -63,6 +68,26 @@ FAMILIES: tuple[Family, ...] = (
 )
 _BY_TYPE = {f.variant_type: f for f in FAMILIES}
 
+#: 상대높임법 화계: (이름, 격식 여부, 높임 정도). metadata 의 `speech_level` 에 남습니다.
+SPEECH_LEVELS: dict[str, tuple[str, str, str]] = {
+    "formal": ("합쇼체", "격식체", "아주높임"),
+    "hao": ("하오체", "격식체", "예사높임"),
+    "familiar": ("하게체", "격식체", "예사낮춤"),
+    "plain": ("해라체", "격식체", "아주낮춤"),
+    "polite": ("해요체", "비격식체", "두루높임"),
+    "banmal": ("해체", "비격식체", "두루낮춤"),
+}
+
+#: `ending` 에서 만들 화계 순서. 앞에서부터 원문과 달라지는 것을 씁니다.
+#: 하오체·하게체는 예스러운 말투라 기본에서 뺍니다.
+DEFAULT_LEVELS = ("formal", "banmal", "polite", "plain")
+
+#: 변형기 기본 옵션. 프롬프트는 대부분 요청문이므로 평서·명령을 겸하는
+#: `-세요` 를 명령으로 봅니다(도와주세요 -> 도와주십시오 / 도와줘).
+DEFAULT_OPTIONS: dict[str, dict[str, Any]] = {
+    "honorific": {"ambiguous_mood": "명령"},
+}
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -70,6 +95,7 @@ class Candidate:
 
     family: Family
     edits: tuple[Edit, ...]
+    level: str = ""          # ending 후보의 화계
 
     @property
     def features(self) -> tuple[str, ...]:
@@ -100,11 +126,33 @@ def candidates(
     text: str,
     family: Family,
     options: Mapping[str, Mapping[str, Any]] | None = None,
+    levels: Sequence[str] = DEFAULT_LEVELS,
 ) -> list[Candidate]:
-    """`text` 에서 `family` 로 만들 수 있는 변형 후보들(원문 순서)."""
-    opts = options or {}
+    """`text` 에서 `family` 로 만들 수 있는 변형 후보들.
+
+    `level` 모드는 `levels` 순서대로 화계마다 후보 하나(글 전체의 종결어미),
+    `site` 모드는 자리마다 후보 하나이며 원문 순서로 돌려줍니다.
+    """
+    opts = {**DEFAULT_OPTIONS, **(options or {})}
     spans = protected_spans(text)
     out: list[Candidate] = []
+
+    if family.mode == "level":
+        unknown = [level for level in levels if level not in SPEECH_LEVELS]
+        if unknown:
+            raise ValueError(
+                f"없는 화계: {unknown} (사용 가능: {', '.join(SPEECH_LEVELS)})"
+            )
+        (transform,) = transforms(family.transforms)
+        for level in levels:
+            found = transform.find(text, **{**opts.get(transform.name, {}), "levels": (level,)})
+            edits = tuple(
+                site.options[0] for site in group_sites(found) if _safe(site.options[0], spans)
+            )
+            if edits:
+                out.append(Candidate(family, edits, level))
+        return out
+
     for transform in transforms(family.transforms):
         for site in group_sites(transform.find(text, **opts.get(transform.name, {}))):
             for edit in site.options:
@@ -130,17 +178,19 @@ def variants_for(
     mixed: int = 8,
     seed: int = 0,
     options: Mapping[str, Mapping[str, Any]] | None = None,
+    levels: Sequence[str] = DEFAULT_LEVELS,
 ) -> list[tuple[str, list[Candidate]]]:
     """원문 하나의 변형들을 (variant_type, 후보 목록) 꼴로 돌려줍니다.
 
-    단일 종류는 자리 중 `per_type` 개를 무작위로 고르고 원문 순서로 번호를
-    매깁니다. mixed 는 후보가 있는 종류에서 하나씩 골라 겹치지 않게 합칩니다.
+    `ending` 은 `levels` 순서대로 앞에서 `per_type` 개를 씁니다. 그 밖의 종류는
+    자리 중 `per_type` 개를 무작위로 고르고 원문 순서로 번호를 매깁니다. mixed 는
+    후보가 있는 종류에서 하나씩 골라 겹치지 않게 합칩니다.
     """
     unknown = [t for t in types if t not in _BY_TYPE]
     if unknown:
         raise ValueError(f"없는 변형 종류: {unknown} (사용 가능: {', '.join(_BY_TYPE)})")
 
-    pools = {t: candidates(text, _BY_TYPE[t], options) for t in types}
+    pools = {t: candidates(text, _BY_TYPE[t], options, levels) for t in types}
     seen = {text}
     out: list[tuple[str, list[Candidate]]] = []
 
@@ -153,13 +203,16 @@ def variants_for(
 
     for vtype in types:
         pool = pools[vtype]
+        level_mode = _BY_TYPE[vtype].mode == "level"
+        order = pool if level_mode else _rng(seed, base_id, vtype).sample(pool, len(pool))
         chosen: list[Candidate] = []
-        for cand in _rng(seed, base_id, vtype).sample(pool, len(pool)):
+        for cand in order:
             if len(chosen) >= per_type:
                 break
             if fresh([cand]):
                 chosen.append(cand)
-        chosen.sort(key=lambda c: c.edits[0].start)
+        if not level_mode:  # 번호는 원문에 나오는 순서로
+            chosen.sort(key=lambda c: c.edits[0].start)
         out += [(vtype, [c]) for c in chosen]
 
     available = [t for t in types if pools[t]]
@@ -283,6 +336,15 @@ def variant_record(
             "transforms": sorted({e.kind for c in combo for e in c.edits}),
         },
     })
+    level = next((c.level for c in combo if c.level), "")
+    if level:
+        korean, formality, politeness = SPEECH_LEVELS[level]
+        md["speech_level"] = {
+            "name": level,
+            "korean": korean,
+            "formality": formality,
+            "politeness": politeness,
+        }
     return {
         "id": f"{base_id}-{vtype}-{realization:02d}",
         "prompt": apply_edits(text, [e for c in combo for e in c.edits]),
@@ -298,6 +360,7 @@ def export(
     seed: int = 0,
     keep_existing: bool = False,
     options: Mapping[str, Mapping[str, Any]] | None = None,
+    levels: Sequence[str] = DEFAULT_LEVELS,
 ) -> list[dict[str, Any]]:
     """원본 문제들로 문제 레코드(원본 + 변형)를 만듭니다.
 
@@ -330,7 +393,9 @@ def export(
             out += [dict(r) for r in olds]
         if base_id not in originals:
             continue
-        made = variants_for(original["prompt"], base_id, types, per_type, mixed, seed, options)
+        made = variants_for(
+            original["prompt"], base_id, types, per_type, mixed, seed, options, levels
+        )
         for vtype, combo in made:
             used[vtype] = n = used.get(vtype, 0) + 1
             out.append(variant_record(original, vtype, combo, n))

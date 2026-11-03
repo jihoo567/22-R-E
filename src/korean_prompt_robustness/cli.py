@@ -102,10 +102,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     variants = subparsers.add_parser(
         "variants",
-        help="원본 문제의 조사·생략 변형 문제 JSONL 생성",
+        help="원본 문제의 높임법·조사·생략 변형 문제 JSONL 생성",
         description=(
-            "원본 문제마다 조사 변형(particle)과 생략 변형(omission)을 만들어 "
-            "answer에서 바로 쓸 수 있는 문제 JSONL로 저장합니다."
+            "원본 문제마다 높임법 변형(ending), 조사 변형(particle), 생략 변형"
+            "(omission)을 만들어 answer에서 바로 쓸 수 있는 문제 JSONL로 저장합니다."
         ),
     )
     variants.add_argument(
@@ -122,8 +122,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     variants.add_argument(
         "--types",
-        default="particle,omission",
+        default="ending,particle,omission",
         help="만들 변형 종류를 쉼표로 (기본: %(default)s)",
+    )
+    variants.add_argument(
+        "--levels",
+        default="formal,banmal,polite,plain",
+        help=(
+            "ending에 쓸 화계 순서. 격식체 formal(합쇼체)·plain(해라체)·hao(하오체)·"
+            "familiar(하게체), 비격식체 polite(해요체)·banmal(해체) (기본: %(default)s)"
+        ),
     )
     variants.add_argument(
         "--per-type", type=int, default=3, help="종류별 변형 수 (기본: %(default)s)"
@@ -240,6 +248,7 @@ def _variants(args: argparse.Namespace) -> None:
         mixed=args.mixed,
         seed=args.seed,
         keep_existing=args.keep_existing,
+        levels=[level.strip() for level in args.levels.split(",") if level.strip()],
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

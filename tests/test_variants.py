@@ -18,6 +18,8 @@ from korean_prompt_robustness.variants.export import (
     edit_operations,
     protected_spans,
 )
+from korean_prompt_robustness.variants.core import apply_edits, group_sites
+from korean_prompt_robustness.variants.honorific import Honorific, swap_honorific
 from korean_prompt_robustness.variants.josa_omit import omit_josa
 from korean_prompt_robustness.variants.josa_swap import swap_josa
 from korean_prompt_robustness.variants.subject_drop import drop_subjects
@@ -78,7 +80,81 @@ class TransformTests(unittest.TestCase):
         self.assertEqual(drop_deixis("저는 학생입니다."), "저는 학생입니다.")
 
 
+class HonorificTests(unittest.TestCase):
+    def test_levels(self):
+        # 화계 순서: formal polite hao familiar plain banmal
+        cases = [
+            ("밥을 먹었다.", ["밥을 먹었습니다.", "밥을 먹었어요.", "밥을 먹었소.",
+                           "밥을 먹었네.", "밥을 먹었다.", "밥을 먹었어."]),
+            ("학교에 갑니다.", ["학교에 갑니다.", "학교에 가요.", "학교에 가오.",
+                            "학교에 가네.", "학교에 간다.", "학교에 가."]),
+        ]
+        levels = ("formal", "polite", "hao", "familiar", "plain", "banmal")
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual([swap_honorific(source, level) for level in levels], expected)
+
+    def test_irregular_conjugation(self):
+        self.assertEqual(swap_honorific("음악을 듣는다.", "polite"), "음악을 들어요.")
+        self.assertEqual(swap_honorific("친구를 돕는다.", "polite"), "친구를 도와요.")
+        self.assertEqual(swap_honorific("하늘이 파랗다.", "polite"), "하늘이 파래요.")
+
+    def test_subject_honorific(self):
+        self.assertEqual(swap_honorific("선생님이 가셨다.", "formal"), "선생님이 가셨습니다.")
+        # 낮춤 화계로 바꿀 때는 주체높임 시를 뗍니다.
+        self.assertEqual(swap_honorific("선생님이 가셨다.", "banmal"), "선생님이 갔어.")
+        self.assertEqual(swap_honorific("그렇게 하십시오.", "plain"), "그렇게 해라.")
+
+    def test_ambiguous_mood(self):
+        def swap(text, level, **options):
+            sites = group_sites(Honorific().find(text, levels=(level,), **options))
+            return apply_edits(text, [site.options[0] for site in sites])
+
+        self.assertEqual(swap("먼저 가세요.", "formal"), "먼저 가십니다.")  # 기본은 평서
+        self.assertEqual(swap("먼저 가세요.", "formal", ambiguous_mood="명령"), "먼저 가십시오.")
+        self.assertEqual(swap("먼저 가세요.", "banmal", ambiguous_mood="명령"), "먼저 가.")
+        with self.assertRaises(ValueError):
+            Honorific().find("먼저 가세요.", ambiguous_mood="없는서법")
+
+    def test_only_sentence_final_endings(self):
+        self.assertEqual(
+            swap_honorific("책을 읽고 밥을 먹었다.", "formal"), "책을 읽고 밥을 먹었습니다."
+        )
+
+
 class ExportTests(unittest.TestCase):
+    def test_ending_variants_per_speech_level(self):
+        records = export([ORIGINAL], types=("ending",), mixed=0)[1:]
+        self.assertEqual(
+            [record["prompt"] for record in records[:2]],
+            [
+                PROMPT.replace("세요", "십시오"),
+                PROMPT.replace("도와주세요", "도와줘")
+                .replace("제공해주세요", "제공해줘")
+                .replace("반환하세요", "반환해"),
+            ],
+        )
+        levels = [
+            (r["metadata"]["speech_level"]["name"], r["metadata"]["speech_level"]["formality"])
+            for r in records
+        ]
+        self.assertEqual(levels, [("formal", "격식체"), ("banmal", "비격식체"), ("plain", "격식체")])
+        metadata = records[0]["metadata"]
+        self.assertEqual(metadata["variant_type"], "ending")
+        self.assertEqual(metadata["variant_label"], "높임법·어미")
+        self.assertEqual(metadata["changed_features"], ["ending"])
+        self.assertEqual(
+            (metadata["edit_operations"][0]["before"], metadata["edit_operations"][0]["after"]),
+            ("도와주세요.", "도와주십시오."),
+        )
+
+    def test_levels_option(self):
+        records = export([ORIGINAL], types=("ending",), mixed=0, levels=("polite", "banmal"))[1:]
+        # 원문이 이미 해요체라 polite 는 원문과 같아 버려집니다.
+        self.assertEqual([r["metadata"]["speech_level"]["name"] for r in records], ["banmal"])
+        with self.assertRaises(ValueError):
+            export([ORIGINAL], types=("ending",), levels=("없는화계",))
+
     def test_original_kept_first(self):
         records = export([ORIGINAL], mixed=0)
         first = records[0]
@@ -119,14 +195,30 @@ class ExportTests(unittest.TestCase):
 
     def test_mixed_combines_families(self):
         text = "그 사람이 철수에게 책을 줬다. 그 사람이 웃었다."
-        records = [r for r in export([{"id": "x", "prompt": text}], mixed=3) if "-mixed-" in r["id"]]
+        records = [
+            r
+            for r in export([{"id": "x", "prompt": text}], types=("particle", "omission"), mixed=3)
+            if "-mixed-" in r["id"]
+        ]
         self.assertTrue(records)
         for record in records:
             metadata = record["metadata"]
             self.assertEqual(metadata["track"], "synthetic_naturalistic")
             self.assertNotIn("variant_label", metadata)
+            self.assertNotIn("speech_level", metadata)
             families = {operation["family"] for operation in metadata["edit_operations"]}
             self.assertEqual(families, {"particle", "omission"})
+
+    def test_mixed_with_ending_records_speech_level(self):
+        records = [r for r in export([ORIGINAL], mixed=8) if "-mixed-" in r["id"]]
+        with_ending = [
+            r
+            for r in records
+            if any(op["family"] == "ending" for op in r["metadata"]["edit_operations"])
+        ]
+        self.assertTrue(with_ending)
+        for record in with_ending:
+            self.assertIn(record["metadata"]["speech_level"]["formality"], ("격식체", "비격식체"))
 
     def test_same_seed_same_output(self):
         self.assertEqual(export([ORIGINAL], seed=5), export([ORIGINAL], seed=5))
