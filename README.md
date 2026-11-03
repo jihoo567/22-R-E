@@ -323,6 +323,35 @@ Windows PowerShell:
 하오체·하게체는 예스러운 말투라 기본에서 뺐습니다. 쓰려면
 `--levels formal,hao,familiar`처럼 직접 지정합니다.
 
+프롬프트를 여섯 화계 모두로 바꾸려면 `--all-levels`를 씁니다. `--per-type`과
+상관없이 화계마다 하나씩 만들고(원문과 같은 화계는 건너뜀), 다른 종류의 개수에는
+영향을 주지 않습니다. 문체 변형만 만들려면 다른 종류와 혼합을 끕니다.
+
+macOS/Linux:
+
+```bash
+./kpr variants data/examples/problems.jsonl -o data/examples/problems-all-levels.jsonl --types ending --mixed 0 --all-levels
+```
+
+Windows PowerShell:
+
+```powershell
+.\kpr.bat variants data\examples\problems.jsonl -o data\examples\problems-all-levels.jsonl --types ending --mixed 0 --all-levels
+```
+
+```text
+math-001-original   다음 문제를 푸는 것을 도와주세요.
+math-001-ending-01  다음 문제를 푸는 것을 도와주십시오.   합쇼체 · 격식체
+math-001-ending-02  다음 문제를 푸는 것을 도와주시오.     하오체 · 격식체
+math-001-ending-03  다음 문제를 푸는 것을 도와주시게.     하게체 · 격식체
+math-001-ending-04  다음 문제를 푸는 것을 도와줘라.       해라체 · 격식체
+math-001-ending-05  다음 문제를 푸는 것을 도와줘.         해체 · 비격식체
+```
+
+원문이 해요체라 해요체는 빠졌습니다. 한 프롬프트에 화계가 섞여 있으면
+(`작성해 주세요. … 합니다`) 어느 화계로 바꿔도 원문과 달라지므로 여섯 개가 모두
+나옵니다. `--all-levels`와 `--levels`는 함께 쓸 수 없습니다.
+
 `ending` 변형과 `ending`이 섞인 `mixed` 변형에는 적용한 화계가 `speech_level`로
 남아, 격식체·비격식체별로 결과를 나눠 볼 수 있습니다.
 
@@ -350,6 +379,7 @@ Windows PowerShell:
 |---|---|
 | `--types` | 만들 종류. 기본 `ending,particle,omission` |
 | `--levels` | `ending`에 쓸 화계 순서. 기본 `formal,banmal,polite,plain` |
+| `--all-levels` | `ending`을 여섯 화계 모두로 만듦. `--per-type` 제한 없음, `--levels`와 함께 못 씀 |
 | `--per-type` | 종류별 변형 수. 기본 3 |
 | `--mixed` | 섞은 변형 수. 기본 8, `0`이면 만들지 않음 |
 | `--seed` | 난수 시드. 기본 0 |

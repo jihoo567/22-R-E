@@ -24,6 +24,7 @@ from ..dataset import validate_dataset
 from .core import Edit, apply_edits, group_sites, transforms
 
 __all__ = [
+    "ALL_LEVELS",
     "DEFAULT_LEVELS",
     "FAMILIES",
     "SPEECH_LEVELS",
@@ -81,6 +82,9 @@ SPEECH_LEVELS: dict[str, tuple[str, str, str]] = {
 #: `ending` 에서 만들 화계 순서. 앞에서부터 원문과 달라지는 것을 씁니다.
 #: 하오체·하게체는 예스러운 말투라 기본에서 뺍니다.
 DEFAULT_LEVELS = ("formal", "banmal", "polite", "plain")
+
+#: 여섯 화계 전부(`all_levels`). 격식체 높임→낮춤, 비격식체 높임→낮춤 순서입니다.
+ALL_LEVELS = tuple(SPEECH_LEVELS)
 
 #: 변형기 기본 옵션. 프롬프트는 대부분 요청문이므로 평서·명령을 겸하는
 #: `-세요` 를 명령으로 봅니다(도와주세요 -> 도와주십시오 / 도와줘).
@@ -179,16 +183,20 @@ def variants_for(
     seed: int = 0,
     options: Mapping[str, Mapping[str, Any]] | None = None,
     levels: Sequence[str] = DEFAULT_LEVELS,
+    all_levels: bool = False,
 ) -> list[tuple[str, list[Candidate]]]:
     """원문 하나의 변형들을 (variant_type, 후보 목록) 꼴로 돌려줍니다.
 
-    `ending` 은 `levels` 순서대로 앞에서 `per_type` 개를 씁니다. 그 밖의 종류는
-    자리 중 `per_type` 개를 무작위로 고르고 원문 순서로 번호를 매깁니다. mixed 는
-    후보가 있는 종류에서 하나씩 골라 겹치지 않게 합칩니다.
+    `ending` 은 `levels` 순서대로 앞에서 `per_type` 개를 씁니다. `all_levels` 면
+    `levels` 대신 여섯 화계(`ALL_LEVELS`)를 모두, 개수 제한 없이 씁니다. 그 밖의
+    종류는 자리 중 `per_type` 개를 무작위로 고르고 원문 순서로 번호를 매깁니다.
+    mixed 는 후보가 있는 종류에서 하나씩 골라 겹치지 않게 합칩니다.
     """
     unknown = [t for t in types if t not in _BY_TYPE]
     if unknown:
         raise ValueError(f"없는 변형 종류: {unknown} (사용 가능: {', '.join(_BY_TYPE)})")
+    if all_levels:
+        levels = ALL_LEVELS
 
     pools = {t: candidates(text, _BY_TYPE[t], options, levels) for t in types}
     seen = {text}
@@ -205,9 +213,10 @@ def variants_for(
         pool = pools[vtype]
         level_mode = _BY_TYPE[vtype].mode == "level"
         order = pool if level_mode else _rng(seed, base_id, vtype).sample(pool, len(pool))
+        limit = len(pool) if level_mode and all_levels else per_type
         chosen: list[Candidate] = []
         for cand in order:
-            if len(chosen) >= per_type:
+            if len(chosen) >= limit:
                 break
             if fresh([cand]):
                 chosen.append(cand)
@@ -361,10 +370,12 @@ def export(
     keep_existing: bool = False,
     options: Mapping[str, Mapping[str, Any]] | None = None,
     levels: Sequence[str] = DEFAULT_LEVELS,
+    all_levels: bool = False,
 ) -> list[dict[str, Any]]:
     """원본 문제들로 문제 레코드(원본 + 변형)를 만듭니다.
 
     `variant_type` 이 `original` 이거나 없는 레코드를 원본으로 씁니다.
+    `all_levels` 면 `ending` 을 여섯 화계 모두로 만듭니다(`variants_for` 참고).
     `keep_existing` 이면 입력의 기존 변형도 원본 바로 뒤에 그대로 내보내고, 새
     변형 번호는 같은 문제·종류의 기존 번호 뒤에서 이어 매겨 id 가 겹치지 않게 합니다.
     """
@@ -394,7 +405,8 @@ def export(
         if base_id not in originals:
             continue
         made = variants_for(
-            original["prompt"], base_id, types, per_type, mixed, seed, options, levels
+            original["prompt"], base_id, types, per_type, mixed, seed, options, levels,
+            all_levels,
         )
         for vtype, combo in made:
             used[vtype] = n = used.get(vtype, 0) + 1

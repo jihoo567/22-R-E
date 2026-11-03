@@ -125,12 +125,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="ending,particle,omission",
         help="만들 변형 종류를 쉼표로 (기본: %(default)s)",
     )
-    variants.add_argument(
+    levels = variants.add_mutually_exclusive_group()
+    levels.add_argument(
         "--levels",
         default="formal,banmal,polite,plain",
         help=(
             "ending에 쓸 화계 순서. 격식체 formal(합쇼체)·plain(해라체)·hao(하오체)·"
             "familiar(하게체), 비격식체 polite(해요체)·banmal(해체) (기본: %(default)s)"
+        ),
+    )
+    levels.add_argument(
+        "--all-levels",
+        action="store_true",
+        help=(
+            "ending을 여섯 화계 모두로 만들기(--per-type 제한 없음). "
+            "문체 변형만 원하면 --types ending --mixed 0과 함께 사용"
         ),
     )
     variants.add_argument(
@@ -249,6 +258,7 @@ def _variants(args: argparse.Namespace) -> None:
         seed=args.seed,
         keep_existing=args.keep_existing,
         levels=[level.strip() for level in args.levels.split(",") if level.strip()],
+        all_levels=args.all_levels,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

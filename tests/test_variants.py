@@ -155,6 +155,30 @@ class ExportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             export([ORIGINAL], types=("ending",), levels=("없는화계",))
 
+    def test_all_levels(self):
+        # --per-type 와 상관없이 여섯 화계를 모두 씁니다. 원문(해요체)과 같은 것만 빠집니다.
+        records = export([ORIGINAL], types=("ending",), per_type=1, mixed=0, all_levels=True)[1:]
+        self.assertEqual(
+            [r["metadata"]["speech_level"]["name"] for r in records],
+            ["formal", "hao", "familiar", "plain", "banmal"],
+        )
+        self.assertEqual(
+            [r["id"] for r in records],
+            [f"math-001-ending-0{n}" for n in range(1, 6)],
+        )
+        self.assertEqual(
+            [r["prompt"].split(".")[0].split()[-1] for r in records],
+            ["도와주십시오", "도와주시오", "도와주시게", "도와줘라", "도와줘"],
+        )
+
+    def test_all_levels_keeps_other_types_limited(self):
+        records = export([ORIGINAL], types=("ending", "particle"), per_type=2, mixed=0, all_levels=True)
+        counts = {}
+        for record in records[1:]:
+            vtype = record["metadata"]["variant_type"]
+            counts[vtype] = counts.get(vtype, 0) + 1
+        self.assertEqual(counts, {"ending": 5, "particle": 2})
+
     def test_original_kept_first(self):
         records = export([ORIGINAL], mixed=0)
         first = records[0]
@@ -263,6 +287,27 @@ class VariantsCommandTests(unittest.TestCase):
             problems = load_and_validate_dataset(output_path)
             self.assertEqual(problems[0].id, "math-001-original")
             self.assertTrue(any(p.metadata["variant_type"] == "particle" for p in problems))
+
+    def test_all_levels_option(self):
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = Path(directory) / "problems.jsonl"
+            input_path.write_text(json.dumps(ORIGINAL, ensure_ascii=False) + "\n", encoding="utf-8")
+            output_path = Path(directory) / "levels.jsonl"
+            with contextlib.redirect_stdout(io.StringIO()):
+                main([
+                    "variants", str(input_path), "-o", str(output_path),
+                    "--types", "ending", "--mixed", "0", "--all-levels",
+                ])
+            problems = load_and_validate_dataset(output_path)
+            self.assertEqual(
+                [p.metadata.get("speech_level", {}).get("korean") for p in problems],
+                [None, "합쇼체", "하오체", "하게체", "해라체", "해체"],
+            )
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main([
+                    "variants", str(input_path), "-o", str(output_path), "--force",
+                    "--levels", "formal", "--all-levels",
+                ])
 
     def test_refuses_to_overwrite_without_force(self):
         with tempfile.TemporaryDirectory() as directory:
